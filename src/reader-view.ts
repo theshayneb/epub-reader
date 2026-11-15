@@ -92,6 +92,9 @@ async function ensureFoliateViewModule(): Promise<void> {
   await foliateViewModulePromise;
 }
 
+/** The color of highlights saved from Define: blue. */
+const DEFINITION_COLOR = MARK_COLORS[2];
+
 /** A color offered in a picker: its value and the name shown for it. */
 interface ColorChoice {
   value: HighlightColor;
@@ -2080,7 +2083,8 @@ export class OmniBookReaderView extends FileView {
     }
   }
 
-  private async commitHighlight(color: HighlightColor, style: HighlightStyle): Promise<ReaderHighlight | null> {
+  /** `remember` makes `color` the last color used (for tag and note). */
+  private async commitHighlight(color: HighlightColor, style: HighlightStyle, remember = true): Promise<ReaderHighlight | null> {
     if (!this.pendingSelection || !this.bookState || !this.reader) return null;
     const pending = this.plugin.getReaderSettings().connectAdjacentHighlights
       ? this.connectAdjacentHighlights(this.pendingSelection, color, style)
@@ -2137,7 +2141,7 @@ export class OmniBookReaderView extends FileView {
     await this.syncAnnotationDocuments();
     this.renderHighlights();
     this.clearPendingSelection();
-    this.plugin.updateReaderSettings({ defaultHighlightColor: color, defaultHighlightStyle: style });
+    if (remember) this.plugin.updateReaderSettings({ defaultHighlightColor: color, defaultHighlightStyle: style });
     return saved;
   }
 
@@ -2290,7 +2294,7 @@ export class OmniBookReaderView extends FileView {
     const panel = new LookupPanel(this.rootEl, {
       text: pending.text,
       onCopy: (text) => navigator.clipboard.writeText(text),
-      onSave: (result) => this.saveLookup(pending, result),
+      onSave: (result) => this.saveLookup(pending, result, mode),
       onClose: () => {
         if (this.lookupPanel === panel) this.lookupPanel = null;
       },
@@ -2318,11 +2322,14 @@ export class OmniBookReaderView extends FileView {
   }
 
   /** Highlights the looked-up text and keeps the result as its note, tagged #definition or #translation. */
-  private async saveLookup(pending: PendingSelection, result: LookupResult): Promise<void> {
+  private async saveLookup(pending: PendingSelection, result: LookupResult, mode: "define" | "translate"): Promise<void> {
     this.pendingSelection ??= pending;
     if (this.pendingSelection.cfi !== pending.cfi) throw new Error("The selection changed; look the word up again to save it");
     const settings = this.plugin.getReaderSettings();
-    const highlight = await this.commitHighlight(settings.defaultHighlightColor, "highlight");
+    // Words saved from Define are always blue, so they stand out; this does not change the last color used.
+    const highlight = mode === "define"
+      ? await this.commitHighlight(DEFINITION_COLOR, "highlight", false)
+      : await this.commitHighlight(settings.defaultHighlightColor, "highlight");
     if (!highlight) throw new Error("Could not highlight the selection");
     highlight.lookup = true;
     const summary = lookupSummary(result);

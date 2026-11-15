@@ -15,4 +15,6 @@
 
 ## Sync
 
-`noteLayout`, `colorOrder`, `colorNames` and `extraColors` sync between devices as one unit (`SyncedBook.noteSettings`), last writer wins by `noteSettingsUpdatedAt`. A device on a version before 1.1.29 reads the new color values as yellow and can write that back, so every device must be updated before books with recolored highlights are opened on it.
+`noteLayout`, `colorOrder`, `colorNames` and `extraColors` sync between devices as one unit (`SyncedBook.noteSettings`), last writer wins by `noteSettingsUpdatedAt`. A device on a version before 1.1.29 reads the new color values as yellow and writes that back with the original edit's time. Since 1.1.36 highlights read with a color word are marked `legacyColor`, and on a tie in time the copy from an up-to-date device wins (`newerEntry`), so an outdated device cannot turn recolored highlights back to yellow; it still shows them as yellow itself until it is updated.
+
+Highlights saved from **Define** are always blue (`#6f9fe8`) and do not change the last color used.

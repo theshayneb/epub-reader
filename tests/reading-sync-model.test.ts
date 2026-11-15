@@ -212,6 +212,33 @@ describe("reading sync model", () => {
     expect(desktop.state.colorNames).toEqual({ "#83cb67": "Budget" });
   });
 
+  it("does not let an outdated device turn a recolored highlight back to yellow", () => {
+    const tablet = new Device("tablet", bookState({ highlights: [highlight("a", { color: "#ffd12d" })] }));
+    const phone = new Device("phone");
+    tablet.sync(2000);
+    phone.sync(2000, tablet);
+
+    tablet.state.highlights[0]!.color = "#6f9fe8";
+    tablet.sync(3000, phone);
+    // A desktop on a version before 1.1.29 reads the blue value as "yellow" and writes its file back
+    // with the tablet's edit time.
+    const desktopFile = JSON.parse(JSON.stringify(tablet.doc)) as SyncDocument;
+    desktopFile.deviceId = "desktop";
+    const entry = desktopFile.books[BOOK]!.highlights.a!;
+    if ("value" in entry) (entry.value as { color: string }).color = "yellow";
+    const desktop = parseSyncDocument(JSON.stringify(desktopFile))!;
+
+    // Whichever arrives first, the phone and the tablet keep blue.
+    for (const order of [[tablet.doc, desktop], [desktop, tablet.doc]]) {
+      const merged = createSyncDocument("phone-check");
+      for (const doc of order) mergeSyncDocumentInto(merged, structuredClone(doc));
+      const state = bookState({ highlights: [] });
+      applySyncedBook(BOOK, state, merged.books[BOOK]!);
+      expect(state.highlights[0]?.color).toBe("#6f9fe8");
+      expect("legacyColor" in (state.highlights[0] ?? {})).toBe(false);
+    }
+  });
+
   it("reads color words from devices that have not updated yet", () => {
     const parsed = parseSyncDocument(JSON.stringify({
       format: "omni-book-reader-mod-sync",

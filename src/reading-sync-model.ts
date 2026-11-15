@@ -28,7 +28,12 @@ import { isValidCfi, normalizeVaultPath } from "./utils";
 export const SYNC_FORMAT = "omni-book-reader-mod-sync";
 export const SYNC_VERSION = 1;
 
-export type SyncedHighlight = Omit<ReaderHighlight, "stale">;
+/**
+ * `legacyColor` marks a highlight read from a device on a version before 1.1.29, which stored color
+ * words ("yellow") and turns color values it does not know into "yellow" while keeping the edit's
+ * time. On a tie in time, the copy from an up-to-date device wins (see `newerEntry`).
+ */
+export type SyncedHighlight = Omit<ReaderHighlight, "stale"> & { legacyColor?: true };
 export type SyncedBookmark = Omit<Bookmark, "stale">;
 
 export type SyncEntry<T> = { value: T; updatedAt: number } | { deletedAt: number };
@@ -119,10 +124,25 @@ function entryTime(entry: SyncEntry<unknown>): number {
 }
 
 /** Deterministic winner between two entries for the same id. Ties prefer deletion, then the larger value. */
+function isLegacyColorEntry(entry: SyncEntry<unknown>): boolean {
+  return "value" in entry && isRecord(entry.value) && entry.value.legacyColor === true;
+}
+
+/** A highlight value without the `legacyColor` mark, as it is kept locally. */
+function withoutLegacyColor(value: SyncedHighlight): SyncedHighlight {
+  const { legacyColor: _legacyColor, ...rest } = value;
+  return rest;
+}
+
 function newerEntry<T>(left: SyncEntry<T>, right: SyncEntry<T>): SyncEntry<T> {
   const leftTime = entryTime(left);
   const rightTime = entryTime(right);
   if (leftTime !== rightTime) return leftTime > rightTime ? left : right;
+  // An outdated device rewrites colors it does not know as "yellow" but keeps the time of the edit;
+  // the up-to-date device's copy is the real one.
+  const leftLegacy = isLegacyColorEntry(left);
+  const rightLegacy = isLegacyColorEntry(right);
+  if (leftLegacy !== rightLegacy) return leftLegacy ? right : left;
   const leftDeleted = "deletedAt" in left;
   const rightDeleted = "deletedAt" in right;
   if (leftDeleted !== rightDeleted) return leftDeleted ? left : right;
@@ -250,7 +270,7 @@ export function recordLocalBook(
   for (const [id, value] of localHighlights) {
     const entry = book.highlights[id];
     const current = entry && "value" in entry ? entry.value : undefined;
-    if (current && fingerprint(current) === fingerprint(value)) continue;
+    if (current && fingerprint(withoutLegacyColor(current)) === fingerprint(value)) continue;
     const local: SyncEntry<SyncedHighlight> = firstImport
       ? { value, updatedAt: Math.max(value.createdAt, value.noteUpdatedAt ?? 0) }
       : { value, updatedAt: now };
@@ -340,11 +360,11 @@ export function applySyncedBook(path: string, state: BookState, book: SyncedBook
   for (const [id, entry] of Object.entries(book.highlights)) {
     if (!("value" in entry)) continue;
     const previous = previousHighlights.get(id);
-    if (previous && fingerprint(syncedHighlight(previous)) === fingerprint(entry.value)) {
+    if (previous && fingerprint(syncedHighlight(previous)) === fingerprint(withoutLegacyColor(entry.value))) {
       nextHighlights.push(previous);
       continue;
     }
-    const next: ReaderHighlight = structuredClone(entry.value);
+    const next: ReaderHighlight = structuredClone(withoutLegacyColor(entry.value));
     if (previous?.stale && previous.cfi === next.cfi) next.stale = true;
     if (previous) change.removedHighlights.push(previous);
     change.addedHighlights.push(next);
@@ -449,6 +469,7 @@ function parseHighlight(input: unknown): SyncedHighlight | null {
     text: input.text.slice(0, 10000),
     chapter: typeof input.chapter === "string" ? input.chapter : "Untitled chapter",
     color: toHighlightColor(input.color),
+    ...(input.legacyColor === true || (typeof input.color === "string" && !input.color.trim().startsWith("#")) ? { legacyColor: true as const } : {}),
     style: styles.has(String(input.style)) ? input.style as SyncedHighlight["style"] : "highlight",
     tags: Array.isArray(input.tags) ? input.tags.filter((tag): tag is string => typeof tag === "string").slice(0, 20) : [],
     sectionIndex: Math.max(0, Math.round(finite(input.sectionIndex))),

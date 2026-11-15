@@ -32,7 +32,7 @@ Additional reading tools:
 
 ## Defining and translating words
 
-Select a word or phrase and tap the **Define or translate** button in the selection toolbar. English is looked up in a dictionary and shows its pronunciation, parts of speech and definitions; any other language is translated into English. The result appears in a panel at the top centre of the reader (the same panel PDF Annotator uses), so it never covers the passage; it shows "Looking up…" straight away. Nothing is saved unless you ask. From the result you can **Copy** it, or tap **Save as highlight** (always visible at the bottom of the result): that highlights the selection and keeps the result as its note (tagged `#definition` or `#translation` in the reader), and adds it to the book note as `> > - word *-- result (Chapter, [p. 14](link))*`.
+Select a word or phrase and tap the **Define or translate** button in the selection toolbar. English is looked up in a dictionary and shows its pronunciation, parts of speech and definitions; any other language is translated into English. The result appears in a panel at the top centre of the reader (the same panel PDF Annotator uses), so it never covers the passage; it shows "Looking up…" straight away. Nothing is saved unless you ask. From the result you can **Copy** it, or tap **Save as highlight** (always visible at the bottom of the result): that highlights the selection (always in blue for Define) and keeps the result as its note (tagged `#definition` or `#translation` in the reader), and adds it to the book note as `> > - word *-- result (Chapter, [p. 14](link))*`.
 
 ### Network use
 
