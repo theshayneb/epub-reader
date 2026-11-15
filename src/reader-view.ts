@@ -49,7 +49,7 @@ import {
   type SelectionPageTurnSource,
 } from "./mobile-input";
 import { installPublicationSanitizer } from "./sanitizer";
-import { languageName, lookUpSelection, lookupSummary, lookupTag, type LookupResult } from "./word-lookup";
+import { lookUpSelection, lookupSummary, lookupTag, type LookupResult } from "./word-lookup";
 import { SearchSession } from "./search-session";
 import { canNavigateToSavedLocation } from "./saved-location";
 import { ReaderSettingsModal, type SettingsHost } from "./settings-ui";
@@ -70,6 +70,7 @@ import type {
   ReaderSettings,
 } from "./types";
 import { chooseNoteLayout } from "./note-layout";
+import { LookupPanel } from "./lookup-panel";
 import { colorName, compareColors, hasCustomColorName, HighlightColorsModal, MARK_COLORS, paletteColors } from "./highlight-colors";
 import { DEFAULT_FILTERS, FilterBar, matchesDate, type AnnotationFilters } from "./annotation-filters";
 import type { AppliedBookChange } from "./reading-sync-model";
@@ -167,8 +168,6 @@ const NATIVE_MENU_DISMISS_DELAY_MS = 350;
 
 /** How long a just-cleared selection can still be looked up (Android may clear it as the toolbar is tapped). */
 const RECENT_SELECTION_MS = 10000;
-/** Lookups slower than this show a brief "Looking up…" so the button does not seem dead. */
-const SLOW_LOOKUP_MS = 1500;
 
 /** How often the page being read is saved to the book note's `Progress` property while a book is open. */
 const PROGRESS_SAVE_INTERVAL_MS = 3 * 60 * 1000;
@@ -374,26 +373,6 @@ class HighlightTagsModal extends Modal {
   }
 }
 
-/** Fills `container` with a lookup result: a definition for English, otherwise a translation. */
-function renderLookupResult(container: HTMLElement, result: LookupResult): void {
-  if (result.kind === "definition") {
-    if (result.phonetic) container.createDiv({ cls: "omni-book-reader-lookup-phonetic", text: result.phonetic });
-    for (const meaning of result.meanings) {
-      if (meaning.partOfSpeech) container.createEl("h4", { cls: "omni-book-reader-lookup-pos", text: meaning.partOfSpeech });
-      const list = container.createEl("ol", { cls: "omni-book-reader-lookup-senses" });
-      for (const sense of meaning.senses) {
-        const item = list.createEl("li", { text: sense.definition });
-        if (sense.example) item.createDiv({ cls: "omni-book-reader-lookup-example", text: `“${sense.example}”` });
-      }
-    }
-  } else if (result.kind === "translation") {
-    container.createDiv({ cls: "omni-book-reader-lookup-translation", text: result.translation });
-    container.createDiv({ cls: "omni-book-reader-lookup-source", text: `Translated from ${languageName(result.sourceLanguage)}` });
-  } else {
-    container.createDiv({ cls: "omni-book-reader-empty", text: "No definition found." });
-  }
-}
-
 class FootnotePreviewModal extends Modal {
   constructor(
     app: ReaderPluginHost["app"],
@@ -563,7 +542,7 @@ export class OmniBookReaderView extends FileView {
   private statsTimer: number | null = null;
   private progressSaveTimer: number | null = null;
   private lookupInFlight = false;
-  private lookupPanelEl: HTMLElement | null = null;
+  private lookupPanel: LookupPanel | null = null;
   private lastSelection: { pending: PendingSelection; at: number } | null = null;
   private statsLastTick = 0;
   private statsLastActivity = 0;
@@ -2294,62 +2273,38 @@ export class OmniBookReaderView extends FileView {
       return;
     }
     this.lookupInFlight = true;
-    // Only say anything about the lookup itself if it is slow.
-    const slowTimer = window.setTimeout(() => this.showLocalStatus("Looking up…", 12000), SLOW_LOOKUP_MS);
+    this.closeLookupPanel();
+    if (!this.rootEl) {
+      this.lookupInFlight = false;
+      return;
+    }
+    // Showing the result ends the selection too, so closing the result is the only tap left.
+    this.clearPendingSelection();
+    // The panel shared with PDF Annotator, inside the reader so it stays visible in focus mode
+    // (whose full-screen layer sits above Obsidian's modals).
+    const panel = new LookupPanel(this.rootEl, {
+      text: pending.text,
+      onCopy: (text) => navigator.clipboard.writeText(text),
+      onSave: (result) => this.saveLookup(pending, result),
+      onClose: () => {
+        if (this.lookupPanel === panel) this.lookupPanel = null;
+      },
+    });
+    this.lookupPanel = panel;
     try {
       const result = await lookUpSelection(pending.text);
-      window.clearTimeout(slowTimer);
-      this.localStatusEl?.removeClass("is-visible");
-      // Showing the result ends the selection too, so closing the result is the only tap left.
-      this.clearPendingSelection();
-      this.showLookupResult(result, pending);
+      if (panel.isOpen) panel.showResult(result);
     } catch (error) {
-      window.clearTimeout(slowTimer);
       console.error("[Omni Book Reader] Word lookup failed", error);
-      const reason = error instanceof Error && error.message ? ` (${error.message})` : "";
-      this.showLocalStatus(`Could not look up the selection${reason}`, 6000);
+      if (panel.isOpen) panel.showError(error);
     } finally {
       this.lookupInFlight = false;
     }
   }
 
-  /**
-   * Shows a lookup result in a panel inside the reader rather than an Obsidian modal, so it stays
-   * visible in focus mode, whose full-screen layer sits above Obsidian's modals.
-   */
-  private showLookupResult(result: LookupResult, pending: PendingSelection): void {
-    this.closeLookupPanel();
-    if (!this.rootEl) return;
-    const panel = this.rootEl.createDiv({
-      cls: "omni-book-reader-lookup",
-      attr: { role: "dialog", "aria-label": "Word lookup result" },
-    });
-    const header = panel.createDiv({ cls: "omni-book-reader-lookup-header" });
-    header.createDiv({ cls: "omni-book-reader-lookup-title", text: result.text });
-    iconButton(header, "x", "Close").addEventListener("click", () => this.closeLookupPanel());
-    renderLookupResult(panel.createDiv({ cls: "omni-book-reader-lookup-body" }), result);
-    if (result.kind !== "not-found") {
-      const actions = panel.createDiv({ cls: "omni-book-reader-modal-actions" });
-      const copy = actions.createEl("button", { text: "Copy", attr: { type: "button" } });
-      const save = actions.createEl("button", { cls: "mod-cta", text: "Save to book note", attr: { type: "button" } });
-      copy.addEventListener("click", () => {
-        void navigator.clipboard.writeText(`${result.text}: ${lookupSummary(result)}`).then(() => this.showLocalStatus("Copied"));
-      });
-      save.addEventListener("click", () => {
-        save.disabled = true;
-        void this.saveLookup(pending, result).then(() => this.closeLookupPanel(), (error: unknown) => {
-          console.error("[Omni Book Reader] Could not save the lookup", error);
-          this.showLocalStatus(error instanceof Error ? error.message : "Could not save the lookup");
-          save.disabled = false;
-        });
-      });
-    }
-    this.lookupPanelEl = panel;
-  }
-
   private closeLookupPanel(): void {
-    this.lookupPanelEl?.remove();
-    this.lookupPanelEl = null;
+    this.lookupPanel?.remove();
+    this.lookupPanel = null;
   }
 
   /** Highlights the looked-up text and keeps the result as its note, tagged #definition or #translation. */
@@ -2987,7 +2942,7 @@ export class OmniBookReaderView extends FileView {
     if (event.defaultPrevented) return;
     if (isEditableTarget(event.target)) return;
     if (event.key === "Escape") {
-      if (this.lookupPanelEl) this.closeLookupPanel();
+      if (this.lookupPanel?.isOpen) this.closeLookupPanel();
       else if (this.pageJumpEl?.hasClass("is-open")) this.closePageJump();
       else if (this.quickSettingsOpen) this.toggleQuickSettings(false);
       else if (this.pendingSelection) this.clearPendingSelection();

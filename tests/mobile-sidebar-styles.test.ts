@@ -51,7 +51,7 @@ describe("mobile reader sidebar layout", () => {
     const toolbar = zIndex(".omni-book-reader-selection-toolbar");
     expect(toolbar).toBeGreaterThan(0);
     expect(zIndex(".omni-book-reader-local-status")).toBeGreaterThan(toolbar);
-    expect(zIndex(".omni-book-reader-lookup")).toBeGreaterThan(toolbar);
+    expect(zIndex(".lu-panel")).toBeGreaterThan(toolbar);
   });
 
   it("never resets Obsidian's dropdown arrow with the background shorthand", () => {

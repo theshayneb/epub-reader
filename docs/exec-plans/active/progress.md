@@ -11,9 +11,9 @@ This file is the compact project-level checkpoint. Detailed multi-step work may 
 - Architecture: current runtime, persistence, export, safety, and release boundaries documented in `ARCHITECTURE.md`.
 - Verification: `npm run verify:quick` and `npm run verify:full` are the standard gates.
 - Active feature plan: [`mobile-selection-navigation-lock.md`](mobile-selection-navigation-lock.md) for GitHub Issue #3.
-- Active feature plan: [`plugin-alignment.md`](plugin-alignment.md), aligning ePub Reader with PDF Annotator (stages 1–2: note layouts, colors).
 - Latest completed release plan: [`../completed/release-1.0.2.md`](../completed/release-1.0.2.md).
-- Latest completed feature plan: [`../completed/single-annotation-file.md`](../completed/single-annotation-file.md), one highlights-and-notes file per book (1.1.3).
+- Latest completed feature plan: [`../completed/plugin-alignment.md`](../completed/plugin-alignment.md), ePub Reader aligned with PDF Annotator (1.1.28–1.1.33).
+- Earlier completed feature plan: [`../completed/single-annotation-file.md`](../completed/single-annotation-file.md), one highlights-and-notes file per book (1.1.3).
 
 ## Workflow
 

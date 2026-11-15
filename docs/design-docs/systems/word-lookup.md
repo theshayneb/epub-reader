@@ -28,3 +28,7 @@ The owner wanted to select a word and get a definition if it is English, or a tr
 ## Validation
 
 `tests/word-lookup.test.ts` covers definitions, translations, missing entries, undetectable input, summaries and tags, and malformed answers.
+
+## Result panel (1.1.33)
+
+The result is shown by `src/lookup-panel.ts`, a verbatim copy of PDF Annotator's file, with the `lu-*` CSS block at the end of `styles.css`. It sits at the top centre of the reader root (below the header, via `--lu-top`), shows "Looking up…" at once and any error in place, and offers **Copy** and **Save as highlight**. It stays inside the reader so focus mode cannot cover it.

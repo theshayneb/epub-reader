@@ -11,7 +11,7 @@ Make ePub Reader and PDF Annotator look and behave alike wherever they overlap, 
 3. **Selection toolbar** (1.1.30): styles → colors (tap to highlight) → tag, note, copy, define, close, as in PDF Annotator 1.0.42. The separate "Highlight with defaults" button is gone (tapping a color does it); copy is new.
 4. **Highlights panel** (1.1.31): sidebar on the right; shared filter bar (`annotation-filters.ts`) with search, color chips, tag, chapter, notes, date and sort (reading order by default). Design: [`../../design-docs/systems/highlights-panel.md`](../../design-docs/systems/highlights-panel.md).
 5. **Styles removed** (1.1.32, owner's decision): every new highlight is a plain highlight; the style buttons, the edit window's style menu and the default-style setting are gone. Existing underline/strikethrough/squiggly highlights keep their look and can be turned into highlights from their edit window. Same in PDF Annotator 1.0.44.
-6. Define/translate result: same placement and wording.
+6. **Define/translate result** (1.1.33): shared `lookup-panel.ts` and `lu-*` CSS: top centre of the reader (`--lu-top` per plugin), "Looking up…" straight away, errors in the panel, Copy and **Save as highlight**. Same in PDF Annotator 1.0.45.
 
 ## Acceptance criteria (stage 1)
 
@@ -21,6 +21,8 @@ Make ePub Reader and PDF Annotator look and behave alike wherever they overlap, 
 - Callout output is unchanged for existing books.
 
 ## Validation
+
+- 2026-11-15 (stage 6): `npm run verify:full`; the panel rendered in a browser with both plugins' styles. Not tried on a device.
 
 - 2026-11-15 (stage 5): `npm run verify:full`. Not tried on a device.
 
