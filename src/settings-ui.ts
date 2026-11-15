@@ -175,13 +175,6 @@ function renderSettings(
       .onChange((defaultHighlightColor) => host.updateReaderSettings({ defaultHighlightColor: toHighlightColor(defaultHighlightColor) })));
 
   new Setting(container)
-    .setName("Default annotation style")
-    .addDropdown((dropdown) => dropdown
-      .addOptions({ highlight: "Highlight", underline: "Underline", strikethrough: "Strikethrough", squiggly: "Squiggly" })
-      .setValue(get().defaultHighlightStyle)
-      .onChange((defaultHighlightStyle) => host.updateReaderSettings({ defaultHighlightStyle: defaultHighlightStyle as ReaderSettings["defaultHighlightStyle"] })));
-
-  new Setting(container)
     .setName("Merge adjacent highlights")
     .setDesc("Save adjacent selections with matching chapter, color, and style as one annotation.")
     .addToggle((toggle) => toggle
@@ -388,13 +381,6 @@ export class OmniBookReaderSettingTab extends PluginSettingTab {
             control: {
               type: "dropdown", key: "defaultHighlightColor",
               options: PALETTE_OPTIONS,
-            },
-          },
-          {
-            name: "Default annotation style",
-            control: {
-              type: "dropdown", key: "defaultHighlightStyle",
-              options: { highlight: "Highlight", underline: "Underline", strikethrough: "Strikethrough", squiggly: "Squiggly" },
             },
           },
           {

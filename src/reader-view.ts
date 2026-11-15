@@ -270,12 +270,15 @@ class HighlightActionsModal extends Modal {
     const colorSelect = colorLabel.createEl("select", { attr: { "aria-label": "Annotation color" } });
     for (const choice of this.colors) colorSelect.createEl("option", { text: choice.label, value: choice.value });
     colorSelect.value = this.highlight.color;
-    const styleLabel = options.createEl("label", { text: "Style" });
-    const styleSelect = styleLabel.createEl("select", { attr: { "aria-label": "Annotation style" } });
-    for (const [style, definition] of Object.entries(HIGHLIGHT_STYLES) as Array<[HighlightStyle, typeof HIGHLIGHT_STYLES[HighlightStyle]]>) {
-      styleSelect.createEl("option", { text: definition.label, value: style });
+    // New highlights are always plain highlights; an older underline and so on can be turned into one.
+    let style: HighlightStyle = this.highlight.style;
+    if (style !== "highlight") {
+      const change = options.createEl("button", { text: `Change this ${HIGHLIGHT_STYLES[style].label.toLowerCase()} to a highlight`, attr: { type: "button" } });
+      change.addEventListener("click", () => {
+        style = "highlight";
+        change.remove();
+      });
     }
-    styleSelect.value = this.highlight.style;
     const tagsLabel = this.contentEl.createEl("label", { cls: "omni-book-reader-note-label", text: "Tags" });
     const tagsInput = tagsLabel.createEl("input", {
       cls: "omni-book-reader-tags-input",
@@ -296,7 +299,7 @@ class HighlightActionsModal extends Modal {
       void this.runAction([cancel, remove, save], async () => this.onSave({
         note: textarea.value,
         color: colorSelect.value,
-        style: styleSelect.value as HighlightStyle,
+        style,
         tags: parseTags(tagsInput.value),
       }));
     });
@@ -544,7 +547,6 @@ export class OmniBookReaderView extends FileView {
   private bookState: BookState | null = null;
   private currentLocation: FoliateLocation = {};
   private pendingSelection: PendingSelection | null = null;
-  private selectedHighlightStyle: HighlightStyle = "highlight";
   /** The highlights list's filters (shared with PDF Annotator's Annotations panel). */
   private highlightFilters: AnnotationFilters = { ...DEFAULT_FILTERS };
   private highlightFilterBar: FilterBar | null = null;
@@ -900,31 +902,18 @@ export class OmniBookReaderView extends FileView {
 
     this.selectionToolbarEl = root.createDiv({ cls: "omni-book-reader-selection-toolbar" });
     this.selectionToolbarEl.setAttribute("role", "toolbar");
-    this.selectionToolbarEl.setAttribute("aria-label", "Annotation style and color");
-    this.selectedHighlightStyle = this.plugin.getReaderSettings().defaultHighlightStyle;
-    const styleButtons = new Map<HighlightStyle, HTMLButtonElement>();
-    for (const [style, definition] of Object.entries(HIGHLIGHT_STYLES) as Array<[HighlightStyle, typeof HIGHLIGHT_STYLES[HighlightStyle]]>) {
-      const button = iconButton(this.selectionToolbarEl, definition.icon, definition.label);
-      button.addClass("omni-book-reader-style-button");
-      button.toggleClass("is-active", style === this.selectedHighlightStyle);
-      button.addEventListener("click", () => {
-        this.selectedHighlightStyle = style;
-        for (const [key, candidate] of styleButtons) candidate.toggleClass("is-active", key === style);
-      });
-      styleButtons.set(style, button);
-    }
-    this.selectionToolbarEl.createDiv({ cls: "omni-book-reader-toolbar-divider" });
+    this.selectionToolbarEl.setAttribute("aria-label", "Highlight color and actions");
     this.selectionColorsEl = this.selectionToolbarEl.createDiv({ cls: "omni-book-reader-selection-colors" });
     this.renderSelectionColors();
-    // Same order as PDF Annotator's toolbar: styles, colors (tap to highlight), then tag, note, copy, define, close.
+    // Same order as PDF Annotator's toolbar: colors (tap to highlight), then tag, note, copy, define, close.
     // Tag and note highlight in the last color used.
     this.selectionToolbarEl.createDiv({ cls: "omni-book-reader-toolbar-divider" });
     const addTags = iconButton(this.selectionToolbarEl, "tag", "Highlight and add tags");
-    addTags.addEventListener("click", () => void this.commitHighlight(this.plugin.getReaderSettings().defaultHighlightColor, this.selectedHighlightStyle).then((highlight) => {
+    addTags.addEventListener("click", () => void this.commitHighlight(this.plugin.getReaderSettings().defaultHighlightColor, "highlight").then((highlight) => {
       if (highlight) this.openHighlightTags(highlight);
     }));
     const addNote = iconButton(this.selectionToolbarEl, "notebook-pen", "Highlight and add note");
-    addNote.addEventListener("click", () => void this.commitHighlight(this.plugin.getReaderSettings().defaultHighlightColor, this.selectedHighlightStyle).then((highlight) => {
+    addNote.addEventListener("click", () => void this.commitHighlight(this.plugin.getReaderSettings().defaultHighlightColor, "highlight").then((highlight) => {
       if (highlight) this.openHighlightActions(highlight);
     }));
     const copy = iconButton(this.selectionToolbarEl, "copy", "Copy selected text");
@@ -2368,7 +2357,7 @@ export class OmniBookReaderView extends FileView {
     this.pendingSelection ??= pending;
     if (this.pendingSelection.cfi !== pending.cfi) throw new Error("The selection changed; look the word up again to save it");
     const settings = this.plugin.getReaderSettings();
-    const highlight = await this.commitHighlight(settings.defaultHighlightColor, this.selectedHighlightStyle);
+    const highlight = await this.commitHighlight(settings.defaultHighlightColor, "highlight");
     if (!highlight) throw new Error("Could not highlight the selection");
     highlight.lookup = true;
     const summary = lookupSummary(result);
@@ -2420,7 +2409,7 @@ export class OmniBookReaderView extends FileView {
       });
       button.setCssProps({ "--highlight-color": choice.value });
       button.toggleClass("is-active", choice.value === this.plugin.getReaderSettings().defaultHighlightColor);
-      button.addEventListener("click", () => void this.commitHighlight(choice.value, this.selectedHighlightStyle).then(() => this.renderSelectionColors()));
+      button.addEventListener("click", () => void this.commitHighlight(choice.value, "highlight").then(() => this.renderSelectionColors()));
     }
   }
 
