@@ -3088,7 +3088,7 @@ body.is-mobile .omni-book-reader.is-chrome-hidden:not(.is-sidebar-open) .omni-bo
 
   .omni-book-reader-sidebar,
   .omni-book-reader.is-sidebar-open .omni-book-reader-sidebar {
-    border-radius: 28px 0 0 28px;
+    border-radius: 14px 0 0 14px;
   }
 }
 
@@ -3343,5 +3343,290 @@ body.is-mobile .omni-book-reader.is-chrome-hidden:not(.is-sidebar-open) .omni-bo
   .lu-actions button {
     min-width: 44px;
     min-height: 44px;
+  }
+}
+
+/* ==========================================================================
+   PDF Annotator's look, so the two plugins look the same (owner's choice):
+   the selection toolbar, square color chips, accent icons, a floating panel
+   and annotation cards. Colors still come from Obsidian's theme.
+   ========================================================================== */
+
+.omni-book-reader-selection-toolbar:not(#omni-book-reader-look) {
+  gap: 6px;
+  padding: 6px 7px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 13px;
+  background: var(--background-primary);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 22%);
+}
+
+body.is-mobile .omni-book-reader-selection-toolbar:not(#omni-book-reader-look) {
+  padding: 7px 8px;
+  border-radius: 17px;
+}
+
+/* Color chips: small rounded squares; the last-used one has an accent outline. */
+.omni-book-reader-color-button:not(#omni-book-reader-look) {
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+  min-height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: var(--highlight-color);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 8%);
+}
+
+.omni-book-reader-color-button.is-active:not(#omni-book-reader-look) {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+/* On touch screens: a 44px target around a 20px square. */
+body.is-mobile .omni-book-reader-color-button:not(#omni-book-reader-look) {
+  position: relative;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  outline: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.is-mobile .omni-book-reader-color-button::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--highlight-color);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 10%);
+  transform: translate(-50%, -50%);
+}
+
+body.is-mobile .omni-book-reader-color-button.is-active::after {
+  box-shadow: 0 0 0 2px var(--background-primary), 0 0 0 4px var(--interactive-accent);
+}
+
+/* Toolbar icons: accent-colored, a faint accent tint on hover. */
+.omni-book-reader-selection-actions .omni-book-reader-icon-button:not(#omni-book-reader-look) {
+  width: 25px;
+  min-width: 25px;
+  height: 25px;
+  min-height: 25px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--interactive-accent);
+}
+
+.omni-book-reader-selection-actions .omni-book-reader-icon-button:not(#omni-book-reader-look):hover {
+  background: color-mix(in srgb, var(--interactive-accent) 10%, transparent);
+}
+
+.omni-book-reader-selection-toolbar .omni-book-reader-icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+body.is-mobile .omni-book-reader-selection-actions .omni-book-reader-icon-button:not(#omni-book-reader-look),
+body.is-mobile .omni-book-reader-selection-close:not(#omni-book-reader-look) {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  border-radius: 10px;
+}
+
+body.is-mobile .omni-book-reader-selection-toolbar .omni-book-reader-icon-button svg {
+  width: 20px;
+  height: 20px;
+}
+
+.omni-book-reader-selection-close:not(#omni-book-reader-look) {
+  width: 25px;
+  min-width: 25px;
+  height: 25px;
+  min-height: 25px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+body.is-mobile .omni-book-reader-selection-close:not(#omni-book-reader-look) {
+  border-radius: 50%;
+}
+
+/* The sidebar floats over the page on the right, like PDF Annotator's Annotations panel. */
+@media (min-width: 721px) {
+  .omni-book-reader-sidebar:not(#omni-book-reader-look) {
+    position: absolute;
+    z-index: 20;
+    top: 12px;
+    right: 12px;
+    bottom: 12px;
+    width: 340px;
+    min-width: 0;
+    max-height: none;
+    flex-basis: auto;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 14px;
+    background: var(--background-primary);
+    box-shadow: 0 12px 34px rgb(0 0 0 / 16%);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-8px) scale(.985);
+    transition: opacity 150ms ease, transform 150ms ease;
+  }
+
+  .omni-book-reader.is-sidebar-open .omni-book-reader-sidebar:not(#omni-book-reader-look) {
+    width: 340px;
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .omni-book-reader-sidebar:not(#omni-book-reader-look) {
+    transition: none;
+  }
+}
+
+/* Annotation cards. */
+.omni-book-reader-highlight-list {
+  display: grid;
+  gap: 6px;
+  padding-bottom: 8px;
+}
+
+.omni-book-reader-card {
+  position: relative;
+  padding: 9px 11px 9px 14px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--mark-color, #888) 64%, var(--background-modifier-border));
+  border-radius: 10px;
+  background: var(--background-primary);
+  text-align: start;
+  cursor: pointer;
+}
+
+.omni-book-reader-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 4px;
+  background: var(--mark-color);
+}
+
+/* Tint the card itself: some themes make the hover color near-white. */
+.omni-book-reader-card:hover,
+.omni-book-reader-card:focus-visible {
+  background: color-mix(in srgb, var(--mark-color, var(--text-normal)) 12%, var(--background-primary));
+}
+
+.omni-book-reader-card.is-stale {
+  opacity: .6;
+}
+
+.omni-book-reader-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin-bottom: 5px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.omni-book-reader-card-meta strong {
+  flex: none;
+  color: var(--text-normal);
+  font-size: 11px;
+}
+
+.omni-book-reader-card-chapter,
+.omni-book-reader-card-tags {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omni-book-reader-card-tags {
+  color: var(--interactive-accent);
+}
+
+.omni-book-reader-card-color {
+  flex: none;
+  margin-inline-start: auto;
+}
+
+.omni-book-reader-card-edit:not(#omni-book-reader-look) {
+  flex: none;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  margin: -5px -4px -5px 0;
+  padding: 6px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+.omni-book-reader-card-edit:not(#omni-book-reader-look):hover,
+.omni-book-reader-card-edit:not(#omni-book-reader-look):focus-visible {
+  color: var(--interactive-accent);
+}
+
+.omni-book-reader-card-text,
+.omni-book-reader-card-note {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  color: var(--text-normal);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+}
+
+.omni-book-reader-card-text {
+  font-weight: 560;
+}
+
+.omni-book-reader-card-text.has-note {
+  -webkit-line-clamp: 2;
+}
+
+.omni-book-reader-card-note {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--background-modifier-border);
+  font-weight: 400;
+}
+
+body.is-mobile .omni-book-reader-card-text,
+body.is-mobile .omni-book-reader-card-note {
+  font-size: 13px;
+}
+
+@media (pointer: coarse) {
+  .omni-book-reader-card-edit:not(#omni-book-reader-look) {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    margin: -12px -8px -12px 0;
   }
 }

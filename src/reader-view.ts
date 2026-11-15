@@ -2799,29 +2799,35 @@ export class OmniBookReaderView extends FileView {
       list.createDiv({ cls: "omni-book-reader-empty", text: "No annotations match these filters" });
       return;
     }
-    // In reading order, highlights are grouped under their chapter; other orders are one list.
-    const groups = new Map<string, ReaderHighlight[]>();
+    // Cards look like PDF Annotator's: color strip, a meta line (page, kind, tags, color name, edit),
+    // the passage, then the note under a rule.
     for (const highlight of filtered) {
-      const key = filters.sort === "reading" ? highlight.chapter : "";
-      groups.set(key, [...(groups.get(key) ?? []), highlight]);
-    }
-    for (const [chapter, highlights] of groups) {
-      const groupEl = list.createDiv({ cls: "omni-book-reader-highlight-group" });
-      if (chapter) {
-        const heading = groupEl.createDiv({ cls: "omni-book-reader-highlight-group-heading" });
-        heading.createSpan({ text: chapter });
-        heading.createSpan({ text: String(highlights.length) });
+      const card = list.createDiv({ cls: `omni-book-reader-card${highlight.stale ? " is-stale" : ""}`, attr: { role: "button", tabindex: "0" } });
+      card.setCssProps({ "--mark-color": highlight.color });
+      card.setAttr("aria-label", `Go to highlight${highlight.page ? ` on page ${highlight.page}` : ""}`);
+      const meta = card.createDiv({ cls: "omni-book-reader-card-meta" });
+      meta.createEl("strong", { text: highlight.page ? `p. ${highlight.page}` : "—" });
+      if (highlight.chapter && highlight.chapter !== "Untitled chapter") meta.createSpan({ cls: "omni-book-reader-card-chapter", text: highlight.chapter });
+      meta.createSpan({ text: highlight.lookup ? (highlight.tags.includes("translation") ? "translation" : "definition") : highlight.note ? "note" : "highlight" });
+      if (highlight.tags.length) meta.createSpan({ cls: "omni-book-reader-card-tags", text: highlight.tags.map((tag) => `#${tag}`).join(" ") });
+      meta.createSpan({ cls: "omni-book-reader-card-color", text: colorName(highlight.color, names) });
+      const edit = iconButton(meta, "pencil", highlight.note ? "Edit annotation and note" : "Edit annotation and add note");
+      edit.addClass("omni-book-reader-card-edit");
+      edit.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this.openHighlightActions(highlight);
+      });
+      const text = card.createDiv({ cls: "omni-book-reader-card-text", text: highlight.text });
+      if (highlight.note?.trim()) {
+        text.addClass("has-note");
+        card.createDiv({ cls: "omni-book-reader-card-note", text: highlight.note });
       }
-      for (const highlight of highlights) {
-        const row = groupEl.createDiv({ cls: `omni-book-reader-saved-item is-highlight is-style-${highlight.style}${highlight.stale ? " is-stale" : ""}` });
-        row.setCssProps({ "--highlight-color": highlight.color });
-        const open = row.createEl("button", { cls: "omni-book-reader-saved-content", attr: { type: "button" } });
-        open.createDiv({ cls: "omni-book-reader-highlight-text", text: highlight.text });
-        open.addEventListener("click", () => void this.navigateSavedLocation(highlight));
-        const note = iconButton(row, "notebook-pen", highlight.note ? "Edit annotation and note" : "Edit annotation and add note");
-        note.toggleClass("is-active", Boolean(highlight.note));
-        note.addEventListener("click", () => this.openHighlightActions(highlight));
-      }
+      card.addEventListener("click", () => void this.navigateSavedLocation(highlight));
+      card.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        void this.navigateSavedLocation(highlight);
+      });
     }
   }
 
