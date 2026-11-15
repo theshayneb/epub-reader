@@ -884,22 +884,26 @@ export class OmniBookReaderView extends FileView {
     this.selectionToolbarEl.setAttribute("aria-label", "Highlight color and actions");
     this.selectionColorsEl = this.selectionToolbarEl.createDiv({ cls: "omni-book-reader-selection-colors" });
     this.renderSelectionColors();
-    // Same order as PDF Annotator's toolbar: colors (tap to highlight), then tag, note, copy, define, close.
-    // Tag and note highlight in the last color used.
-    this.selectionToolbarEl.createDiv({ cls: "omni-book-reader-toolbar-divider" });
-    const addTags = iconButton(this.selectionToolbarEl, "tag", "Highlight and add tags");
+    // Same layout as PDF Annotator's toolbar: colors (tap to highlight), then tag, note, copy, define and
+    // translate, then close. Tag and note highlight in the last color used. On phones and tablets the colors
+    // and the actions are two rows, with close on the right.
+    const selectionActions = this.selectionToolbarEl.createDiv({ cls: "omni-book-reader-selection-actions" });
+    const addTags = iconButton(selectionActions, "tag", "Highlight and add tags");
     addTags.addEventListener("click", () => void this.commitHighlight(this.plugin.getReaderSettings().defaultHighlightColor, "highlight").then((highlight) => {
       if (highlight) this.openHighlightTags(highlight);
     }));
-    const addNote = iconButton(this.selectionToolbarEl, "notebook-pen", "Highlight and add note");
+    const addNote = iconButton(selectionActions, "notebook-pen", "Highlight and add note");
     addNote.addEventListener("click", () => void this.commitHighlight(this.plugin.getReaderSettings().defaultHighlightColor, "highlight").then((highlight) => {
       if (highlight) this.openHighlightActions(highlight);
     }));
-    const copy = iconButton(this.selectionToolbarEl, "copy", "Copy selected text");
+    const copy = iconButton(selectionActions, "copy", "Copy selected text");
     copy.addEventListener("click", () => void this.copySelection());
-    const lookUp = iconButton(this.selectionToolbarEl, "book-a", "Define or translate");
-    lookUp.addEventListener("click", () => void this.lookUpSelection());
-    const cancelSelection = iconButton(this.selectionToolbarEl, "x", "Cancel highlight");
+    const lookUp = iconButton(selectionActions, "book-a", "Define");
+    lookUp.addEventListener("click", () => void this.lookUpSelection("define"));
+    const translate = iconButton(selectionActions, "languages", "Translate");
+    translate.addEventListener("click", () => void this.lookUpSelection("translate"));
+    const cancelSelection = iconButton(this.selectionToolbarEl, "x", "Close");
+    cancelSelection.addClass("omni-book-reader-selection-close");
     cancelSelection.addEventListener("click", () => this.clearPendingSelection());
 
     root.addEventListener("keydown", (event) => this.handleKeydown(event));
@@ -2259,13 +2263,14 @@ export class OmniBookReaderView extends FileView {
   }
 
   /** Defines the selected English word, or translates other languages, and shows only the result. */
-  private async lookUpSelection(): Promise<void> {
+  /** "define" looks the word up (other languages are translated into English); "translate" asks for a language. */
+  private async lookUpSelection(mode: "define" | "translate" = "define"): Promise<void> {
     // Android can clear the selection as the toolbar is tapped (dismissing its own Copy/Share bar),
     // so fall back to the selection made a moment ago.
     const recent = this.lastSelection && Date.now() - this.lastSelection.at < RECENT_SELECTION_MS ? this.lastSelection.pending : null;
     const pending = this.pendingSelection ?? recent;
     if (!pending?.text.trim()) {
-      this.showLocalStatus("Select a word first, then tap Define or translate", 4000);
+      this.showLocalStatus("Select a word or phrase first", 4000);
       return;
     }
     if (this.lookupInFlight) {
@@ -2291,6 +2296,11 @@ export class OmniBookReaderView extends FileView {
       },
     });
     this.lookupPanel = panel;
+    if (mode === "translate") {
+      panel.translate(pending.text);
+      this.lookupInFlight = false;
+      return;
+    }
     try {
       const result = await lookUpSelection(pending.text);
       if (panel.isOpen) panel.showResult(result);

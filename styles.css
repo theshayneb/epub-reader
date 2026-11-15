@@ -957,10 +957,68 @@ body.omni-book-reader-immersive-mode {
 }
 
 /* Highlight colors are content choices (the book's palette), not interface styling. */
-.omni-book-reader-color-button { background: var(--highlight-color); }
+/* More specific than Obsidian's own button styles (on mobile those painted the colors grey). */
+.omni-book-reader-color-button:not(#omni-book-reader-specificity) { background: var(--highlight-color); }
 
-/* The palette's buttons sit directly in the toolbar's own layout. */
-.omni-book-reader-selection-colors { display: contents; }
+/* Selection toolbar: colors, then the actions, then close (as in PDF Annotator). */
+.omni-book-reader-selection-colors {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.omni-book-reader-selection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding-inline-start: 6px;
+  border-inline-start: 1px solid var(--background-modifier-border);
+}
+
+/* Close stands out: red and bold. */
+.omni-book-reader-selection-close:not(#omni-book-reader-specificity) {
+  border: 1.5px solid color-mix(in srgb, var(--text-error) 55%, transparent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text-error) 12%, transparent);
+  color: var(--text-error);
+}
+
+.omni-book-reader-selection-close:not(#omni-book-reader-specificity):hover {
+  background: color-mix(in srgb, var(--text-error) 22%, transparent);
+}
+
+.omni-book-reader-selection-close svg {
+  stroke-width: 3;
+}
+
+/* Phones and tablets: colors on one row, the actions on a second, close on the right of both. */
+body.is-mobile .omni-book-reader-selection-toolbar.omni-book-reader-selection-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "colors close" "actions close";
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 6px;
+}
+
+body.is-mobile .omni-book-reader-selection-colors {
+  grid-area: colors;
+  justify-content: center;
+}
+
+body.is-mobile .omni-book-reader-selection-actions {
+  grid-area: actions;
+  justify-content: center;
+  padding-inline-start: 0;
+  border-inline-start: 0;
+}
+
+body.is-mobile .omni-book-reader-selection-close {
+  grid-area: close;
+  align-self: center;
+}
 
 .omni-book-reader-sidebar-backdrop {
   display: none;
@@ -3234,6 +3292,20 @@ body.is-mobile .omni-book-reader.is-chrome-hidden:not(.is-sidebar-open) .omni-bo
   padding: 10px 14px 12px;
   border-top: 1px solid var(--background-modifier-border);
   background: var(--background-primary);
+}
+.lu-language {
+  margin: 4px 0 8px;
+}
+.lu-language-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+.lu-language-select {
+  flex: 1;
+  min-width: 0;
 }
 /* The panel's buttons look the same whatever button styles each plugin has. */
 .lu-panel .lu-actions button:not(#lu-specificity) {
