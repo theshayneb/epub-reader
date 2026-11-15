@@ -518,6 +518,7 @@ export class OmniBookReaderView extends FileView {
   private sidebarBookAuthorEl: HTMLElement | null = null;
   private sidebarCoverMarkEl: HTMLElement | null = null;
   private sidebarCoverEl: HTMLElement | null = null;
+  private sidebarExportButton: HTMLButtonElement | null = null;
   private sidebarCoverUrl: string | null = null;
   private sidebarProgressEl: HTMLInputElement | null = null;
   private sidebarProgressTextEl: HTMLElement | null = null;
@@ -532,7 +533,6 @@ export class OmniBookReaderView extends FileView {
   /** The highlights list's filters (shared with PDF Annotator's Annotations panel). */
   private highlightFilters: AnnotationFilters = { ...DEFAULT_FILTERS };
   private highlightFilterBar: FilterBar | null = null;
-  private highlightActionsEl: HTMLElement | null = null;
   private highlightListEl: HTMLElement | null = null;
   private selectionColorsEl: HTMLElement | null = null;
   private sidebarOpen = !Platform.isMobile;
@@ -1122,27 +1122,29 @@ export class OmniBookReaderView extends FileView {
 
   private buildSidebar(parent: HTMLElement): HTMLElement {
     const sidebar = parent.createEl("aside", { cls: "omni-book-reader-sidebar", attr: { "aria-label": "ePub Reader sidebar" } });
-    const bookHeader = sidebar.createDiv({ cls: "omni-book-reader-sidebar-book" });
-    const cover = bookHeader.createDiv({ cls: "omni-book-reader-sidebar-cover" });
-    this.sidebarCoverEl = cover;
-    setIcon(cover, "book-open");
-    this.sidebarCoverMarkEl = cover.createSpan({ text: "O" });
-    const identity = bookHeader.createDiv({ cls: "omni-book-reader-sidebar-identity" });
-    this.sidebarBookTitleEl = identity.createDiv({ cls: "omni-book-reader-sidebar-book-title", text: "ePub Reader" });
-    this.sidebarBookAuthorEl = identity.createDiv({ cls: "omni-book-reader-sidebar-book-author", text: "Loading book information…" });
-    const progressRow = identity.createDiv({ cls: "omni-book-reader-sidebar-progress-row" });
-    this.sidebarProgressEl = progressRow.createEl("input", {
-      cls: "omni-book-reader-sidebar-progress",
-      type: "range",
-      attr: { min: "0", max: "1", step: "0.001", value: "0", "aria-label": "Jump to reading progress" },
-    });
-    this.sidebarProgressTextEl = progressRow.createSpan({ cls: "omni-book-reader-sidebar-progress-text", text: "0%" });
-    this.sidebarProgressEl.addEventListener("input", () => {
-      this.sidebarProgressTextEl?.setText(percentage(Number(this.sidebarProgressEl?.value ?? 0)));
-    });
-    this.sidebarProgressEl.addEventListener("change", () => {
-      if (this.sidebarProgressEl) void this.reader?.goToFraction(Number(this.sidebarProgressEl.value));
-    });
+    // Laid out like PDF Annotator's panel header: tabs, then export and close. The book's title, cover and
+    // progress are already shown in the reading area, so the sidebar does not repeat them.
+    const header = sidebar.createDiv({ cls: "omni-book-reader-sidebar-header" });
+    const tabs = header.createDiv({ cls: "omni-book-reader-tabs", attr: { role: "tablist" } });
+    const definitions: Array<[SidebarTab, string]> = [
+      ["toc", "Contents"],
+      ["highlights", "Annotations"],
+      ["bookmarks", "Bookmarks"],
+    ];
+    for (const [tab, label] of definitions) {
+      const button = tabs.createEl("button", { cls: "omni-book-reader-tab", attr: { type: "button", role: "tab", "aria-label": label } });
+      button.createSpan({ cls: "omni-book-reader-tab-label", text: label });
+      const count = button.createSpan({ cls: "omni-book-reader-tab-count", text: "0" });
+      this.tabCountEls.set(tab, count);
+      button.addEventListener("click", () => this.activateTab(tab));
+      this.tabButtons.set(tab, button);
+    }
+    this.sidebarExportButton = iconButton(header, "file-down", "Export highlights and notes");
+    this.sidebarExportButton.addClass("omni-book-reader-sidebar-export");
+    this.sidebarExportButton.addEventListener("click", () => void this.exportAnnotations());
+    const closeSidebar = iconButton(header, "x", "Close sidebar");
+    closeSidebar.addClass("omni-book-reader-sidebar-close");
+    closeSidebar.addEventListener("click", () => this.setSidebarOpen(false));
 
     const searchBox = sidebar.createDiv({ cls: "omni-book-reader-sidebar-search" });
     const searchIcon = searchBox.createSpan();
@@ -1155,26 +1157,6 @@ export class OmniBookReaderView extends FileView {
       this.activateTab(this.searchInputEl?.value.trim() ? "search" : "toc");
       this.scheduleSearch();
     });
-
-    const tabs = sidebar.createDiv({ cls: "omni-book-reader-tabs", attr: { role: "tablist" } });
-    const definitions: Array<[SidebarTab, string, string]> = [
-      ["toc", "list-tree", "Contents"],
-      ["highlights", "highlighter", "Annotations"],
-      ["bookmarks", "bookmark", "Bookmarks"],
-    ];
-    for (const [tab, icon, label] of definitions) {
-      const button = iconButton(tabs, icon, label);
-      button.addClass("omni-book-reader-tab");
-      button.setAttribute("role", "tab");
-      button.createSpan({ cls: "omni-book-reader-tab-label", text: label });
-      const count = button.createSpan({ cls: "omni-book-reader-tab-count", text: "0" });
-      this.tabCountEls.set(tab, count);
-      button.addEventListener("click", () => this.activateTab(tab));
-      this.tabButtons.set(tab, button);
-    }
-    const closeSidebar = iconButton(tabs, "panel-right-close", "Hide sidebar");
-    closeSidebar.addClass("omni-book-reader-sidebar-close");
-    closeSidebar.addEventListener("click", () => this.setSidebarOpen(false));
 
     const panels = sidebar.createDiv({ cls: "omni-book-reader-panels" });
     this.tocPanelEl = this.createPanel(panels, "toc");
@@ -2734,7 +2716,6 @@ export class OmniBookReaderView extends FileView {
     if (!panel) return;
     if (!this.highlightFilterBar || !panel.contains(this.highlightFilterBar.el)) {
       panel.empty();
-      this.highlightActionsEl = panel.createDiv({ cls: "omni-book-reader-document-actions" });
       this.highlightFilterBar = new FilterBar(panel, {
         searchPlaceholder: "Search highlights",
         onChange: (filters) => {
@@ -2747,13 +2728,6 @@ export class OmniBookReaderView extends FileView {
     }
     const items = this.bookState?.highlights ?? [];
     this.tabCountEls.get("highlights")?.setText(String(items.length));
-    const actions = this.highlightActionsEl;
-    actions?.empty();
-    if (actions && this.bookState?.annotationDocuments) {
-      const exportAnnotations = actions.createEl("button", { text: "Export highlights and notes", attr: { type: "button", "aria-label": "Export all highlights and notes" } });
-      exportAnnotations.addEventListener("click", () => void this.exportAnnotations());
-    }
-    actions?.toggleClass("is-empty", !actions.childElementCount);
 
     const names = this.bookState?.colorNames ?? {};
     const inOrder = [...items].sort(comparePosition);
@@ -2952,6 +2926,8 @@ export class OmniBookReaderView extends FileView {
       button.setAttribute("aria-selected", String(active));
     }
     for (const [key, panel] of this.tabPanels) panel.toggleClass("is-active", key === tab);
+    // Export belongs to the annotations, so it shows on that tab only.
+    this.sidebarExportButton?.toggleClass("is-hidden", tab !== "highlights");
   }
 
   private setSidebarOpen(open: boolean): void {

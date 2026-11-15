@@ -3205,6 +3205,24 @@ body.is-mobile .omni-book-reader.is-chrome-hidden:not(.is-sidebar-open) .omni-bo
   font-size: var(--font-ui-smaller);
   font-variant-numeric: tabular-nums;
 }
+/* No outlines on the chips and the Colors button, whatever button styles each plugin has. */
+.af-bar .af-chip:not(#af-specificity),
+.af-bar .af-edit-colors:not(#af-specificity) {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.af-bar .af-chip:not(#af-specificity):hover,
+.af-bar .af-edit-colors:not(#af-specificity):hover {
+  background: var(--background-modifier-hover);
+}
+.af-bar .af-chip.is-active:not(#af-specificity) {
+  background: color-mix(in srgb, var(--af-color, var(--interactive-accent)) 22%, transparent);
+  color: var(--text-normal);
+}
+.af-bar .af-edit-colors:not(#af-specificity) {
+  color: var(--interactive-accent);
+}
 @media (pointer: coarse) {
   .af-chip,
   .af-edit-colors,
@@ -3471,7 +3489,7 @@ body.is-mobile .omni-book-reader-selection-close:not(#omni-book-reader-look) {
     top: 12px;
     right: 12px;
     bottom: 12px;
-    width: 340px;
+    width: 360px;
     min-width: 0;
     max-height: none;
     flex-basis: auto;
@@ -3486,7 +3504,7 @@ body.is-mobile .omni-book-reader-selection-close:not(#omni-book-reader-look) {
   }
 
   .omni-book-reader.is-sidebar-open .omni-book-reader-sidebar:not(#omni-book-reader-look) {
-    width: 340px;
+    width: 360px;
     opacity: 1;
     pointer-events: auto;
     transform: none;
@@ -3628,5 +3646,106 @@ body.is-mobile .omni-book-reader-card-note {
     height: 44px;
     min-height: 44px;
     margin: -12px -8px -12px 0;
+  }
+}
+
+/* Sidebar header, like PDF Annotator's panel header: tabs, then export and close. */
+.omni-book-reader-sidebar-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  min-height: 46px;
+  padding: 7px 6px 7px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+/* Tabs look like the filter menus below them. */
+.omni-book-reader-sidebar-header .omni-book-reader-tabs:not(#omni-book-reader-look) {
+  display: flex;
+  flex: 1;
+  gap: 3px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+.omni-book-reader-sidebar-header .omni-book-reader-tab:not(#omni-book-reader-look) {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--interactive-normal, var(--background-secondary));
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.omni-book-reader-sidebar-header .omni-book-reader-tab:not(#omni-book-reader-look):hover {
+  background: var(--interactive-hover, var(--background-modifier-hover));
+  color: var(--text-normal);
+}
+
+.omni-book-reader-sidebar-header .omni-book-reader-tab.is-active:not(#omni-book-reader-look) {
+  border-color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 16%, var(--background-primary));
+  color: var(--text-normal);
+}
+
+.omni-book-reader-sidebar-header .omni-book-reader-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omni-book-reader-sidebar-header .omni-book-reader-tab-count {
+  flex: none;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Export and close: accent icons, like PDF Annotator's header buttons. */
+.omni-book-reader-sidebar-header .omni-book-reader-icon-button:not(#omni-book-reader-look) {
+  flex: none;
+  width: 29px;
+  min-width: 29px;
+  height: 29px;
+  min-height: 29px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--interactive-accent);
+}
+
+.omni-book-reader-sidebar-header .omni-book-reader-icon-button:not(#omni-book-reader-look):hover {
+  background: color-mix(in srgb, var(--interactive-accent) 10%, transparent);
+}
+
+.omni-book-reader-sidebar-header .omni-book-reader-icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.omni-book-reader-sidebar-export.is-hidden {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  .omni-book-reader-sidebar-header .omni-book-reader-tab:not(#omni-book-reader-look),
+  .omni-book-reader-sidebar-header .omni-book-reader-icon-button:not(#omni-book-reader-look) {
+    min-height: 44px;
+  }
+
+  .omni-book-reader-sidebar-header .omni-book-reader-icon-button:not(#omni-book-reader-look) {
+    min-width: 44px;
   }
 }
