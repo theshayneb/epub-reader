@@ -61,4 +61,9 @@ describe("mobile reader sidebar layout", () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  it("keeps the reader controls fully visible on touch screens, which have no hover", () => {
+    expect(declarations("body.is-mobile .omni-book-reader-header-actions,\nbody.is-mobile .omni-book-reader-header > .omni-book-reader-icon-button")).toContain("opacity: 1");
+    expect(declarations("body.is-mobile .omni-book-reader-progress-text,\nbody.is-mobile .omni-book-reader-location")).toContain("var(--text-normal)");
+  });
 });

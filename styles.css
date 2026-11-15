@@ -2892,3 +2892,23 @@ body.omni-book-reader-immersive-mode {
   font-size: var(--font-ui-large);
   line-height: 1.4;
 }
+
+/* Touch screens have no hover, so the reader's controls must not depend on it to be fully visible. */
+body.is-mobile .omni-book-reader-header-actions,
+body.is-mobile .omni-book-reader-header > .omni-book-reader-icon-button {
+  opacity: 1;
+}
+
+body.is-mobile .omni-book-reader-progress-text,
+body.is-mobile .omni-book-reader-location {
+  color: var(--text-normal);
+}
+
+body.is-mobile .omni-book-reader-reading-stats {
+  color: var(--text-muted);
+}
+
+body.is-mobile .omni-book-reader.is-chrome-hidden:not(.is-sidebar-open) .omni-book-reader-header,
+body.is-mobile .omni-book-reader.is-chrome-hidden:not(.is-sidebar-open) .omni-book-reader-footer {
+  opacity: .6;
+}

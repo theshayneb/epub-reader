@@ -10,6 +10,65 @@ import { sanitizePublicationMarkup } from "./sanitizer";
 
 const REMOTE_URL = /^(?:https?:)?\/\//i;
 
+/**
+ * Inlined resources for the open book, keyed by a SHA-256 fingerprint of their content. Foliate gives a
+ * resource a new Blob URL whenever it reloads it, so URLs cannot be the key; content can. Each image,
+ * font and stylesheet is then converted once per book instead of on every chapter load. Bounded by size,
+ * least recently used first, and cleared when the book closes.
+ */
+const resourceCache = new Map<string, Promise<string | null>>();
+const resourceSizes = new Map<string, number>();
+let cachedLength = 0;
+const CACHE_LIMIT_CHARS = 48 * 1024 * 1024;
+
+export function clearInlinedResourceCache(): void {
+  resourceCache.clear();
+  resourceSizes.clear();
+  cachedLength = 0;
+}
+
+async function contentKey(kind: string, content: Uint8Array | string): Promise<string | null> {
+  const subtle = window.crypto?.subtle;
+  if (!subtle) return null;
+  try {
+    const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
+    const digest = new Uint8Array(await subtle.digest("SHA-256", bytes));
+    return `${kind}:${Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  } catch {
+    return null;
+  }
+}
+
+function cachedResource(key: string | null, load: () => Promise<string | null>): Promise<string | null> {
+  if (!key) return load();
+  const hit = resourceCache.get(key);
+  if (hit) {
+    // Refresh its place so the least recently used entries are evicted first.
+    resourceCache.delete(key);
+    resourceCache.set(key, hit);
+    return hit;
+  }
+  const promise = load().then((value) => {
+    const size = value?.length ?? 0;
+    if (resourceCache.get(key) === promise) {
+      resourceSizes.set(key, size);
+      cachedLength += size;
+      for (const oldest of resourceCache.keys()) {
+        if (cachedLength <= CACHE_LIMIT_CHARS || oldest === key) break;
+        cachedLength -= resourceSizes.get(oldest) ?? 0;
+        resourceSizes.delete(oldest);
+        resourceCache.delete(oldest);
+      }
+    }
+    return value;
+  }, (error: unknown) => {
+    resourceCache.delete(key);
+    throw error;
+  });
+  resourceCache.set(key, promise);
+  return promise;
+}
+
 function parserType(mediaType: string): DOMParserSupportedType {
   const normalized = mediaType.trim().toLowerCase();
   if (normalized.includes("svg")) return "image/svg+xml";
@@ -61,7 +120,8 @@ function binaryToDataUrl(bytes: Uint8Array, mimeType: string): Promise<string> {
 async function blobResourceDataUrl(url: string): Promise<string | null> {
   const resource = await readBinaryResource(url);
   if (!resource?.bytes.length) return null;
-  return binaryToDataUrl(resource.bytes, resource.mimeType);
+  const key = await contentKey(`data:${resource.mimeType}`, resource.bytes);
+  return cachedResource(key, () => binaryToDataUrl(resource.bytes, resource.mimeType));
 }
 
 async function inlineCssImports(css: string, visited: Set<string>): Promise<string> {
@@ -87,15 +147,14 @@ async function inlineCssImports(css: string, visited: Set<string>): Promise<stri
 
 async function inlineCssBlobUrls(css: string): Promise<string> {
   const pattern = /url\(\s*(['"]?)(blob:[^'"\s)]+)\1\s*\)/gi;
+  const matches = [...css.matchAll(pattern)];
+  const urls = [...new Set(matches.map((match) => (match[2] ?? "").trim()))];
+  // Convert every referenced resource (images, fonts) at once rather than one after another.
+  const dataUrls = await Promise.all(urls.map((url) => blobResourceDataUrl(url)));
+  const replacements = new Map(urls.map((url, index) => [url, dataUrls[index]]));
   let output = css;
-  const replacements = new Map<string, string>();
-  for (const match of [...css.matchAll(pattern)]) {
-    const url = (match[2] ?? "").trim();
-    if (!replacements.has(url)) {
-      const dataUrl = await blobResourceDataUrl(url);
-      if (dataUrl) replacements.set(url, dataUrl);
-    }
-    const replacement = replacements.get(url);
+  for (const match of matches) {
+    const replacement = replacements.get((match[2] ?? "").trim());
     if (replacement) output = output.replace(match[0], `url("${replacement}")`);
   }
   return output;
@@ -109,10 +168,15 @@ function stripUnsupportedCss(css: string): string {
     .replace(/-moz-binding\s*:[^;]+;?/gi, "");
 }
 
-async function normalizeCss(css: string): Promise<string> {
+async function normalizeCssUncached(css: string): Promise<string> {
   await prefetchBlobUrlsFromText(css);
   const imports = await inlineCssImports(css, new Set());
   return stripUnsupportedCss(await inlineCssBlobUrls(imports));
+}
+
+async function normalizeCss(css: string): Promise<string> {
+  if (!css.trim()) return css;
+  return await cachedResource(await contentKey("css", css), () => normalizeCssUncached(css)) ?? "";
 }
 
 function removeBlockingMeta(document: Document): void {
@@ -136,32 +200,32 @@ function createStyleElement(document: Document, css: string, source: Element): E
 }
 
 async function inlineStylesheets(document: Document): Promise<void> {
-  for (const style of [...document.querySelectorAll("style")]) {
+  await Promise.all([...document.querySelectorAll("style")].map(async (style) => {
     style.textContent = await normalizeCss(style.textContent ?? "");
-  }
-  for (const link of [...document.querySelectorAll('link[rel~="stylesheet"][href]')]) {
+  }));
+  await Promise.all([...document.querySelectorAll('link[rel~="stylesheet"][href]')].map(async (link) => {
     const url = link.getAttribute("href")?.trim() ?? "";
     if (REMOTE_URL.test(url)) {
       link.remove();
-      continue;
+      return;
     }
-    if (!isBlobResourceUrl(url)) continue;
+    if (!isBlobResourceUrl(url)) return;
     const css = await readTextResource(url);
     if (!css) {
       link.remove();
-      continue;
+      return;
     }
     link.replaceWith(createStyleElement(document, await normalizeCss(css), link));
-  }
+  }));
 }
 
 async function inlineImages(document: Document): Promise<void> {
-  for (const image of [...document.querySelectorAll("img[src]")]) {
+  await Promise.all([...document.querySelectorAll("img[src]")].map(async (image) => {
     const url = image.getAttribute("src")?.trim() ?? "";
-    if (!isBlobResourceUrl(url)) continue;
+    if (!isBlobResourceUrl(url)) return;
     const dataUrl = await blobResourceDataUrl(url);
     if (dataUrl) image.setAttribute("src", dataUrl);
-  }
+  }));
 }
 
 async function inlineStyleAttributes(document: Document): Promise<void> {

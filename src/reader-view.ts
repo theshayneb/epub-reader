@@ -27,6 +27,7 @@ import {
   installDesktopFoliateIframeSandboxPatch,
   installFoliateBlobIframePatch,
 } from "./foliate-runtime-patches";
+import { clearInlinedResourceCache } from "./foliate-blob-markup-normalizer";
 import { installFoliateCustomElementGuard } from "./foliate-custom-element-guard";
 import { extensionForBlob, safeFileName, saveBlobToVault, sourceToBlob } from "./media-utils";
 import { applyReflowableLayout, resolveViewportWidth } from "./reader-layout";
@@ -153,6 +154,12 @@ export interface ReaderPluginHost extends SettingsHost {
   recordReadingProgress(sourceFile: TFile, page: string): Promise<void>;
   addQuoteToBookNote(sourceFile: TFile, highlight: ReaderHighlight): Promise<void>;
 }
+
+/**
+ * Saving the position writes the whole plugin data file, so wait until page turning pauses rather than
+ * doing it while the next chapter loads. Closing the book still saves immediately.
+ */
+const POSITION_SAVE_DELAY_MS = 2000;
 
 /** Wait for Android to finish adjusting a touch selection before dismissing its text menu. */
 const NATIVE_MENU_DISMISS_DELAY_MS = 350;
@@ -2255,6 +2262,8 @@ export class OmniBookReaderView extends FileView {
       const result = await lookUpSelection(pending.text);
       window.clearTimeout(slowTimer);
       this.localStatusEl?.removeClass("is-visible");
+      // Showing the result ends the selection too, so closing the result is the only tap left.
+      this.clearPendingSelection();
       this.showLookupResult(result, pending);
     } catch (error) {
       window.clearTimeout(slowTimer);
@@ -2479,7 +2488,7 @@ export class OmniBookReaderView extends FileView {
     this.progressTimer = window.setTimeout(() => {
       this.progressTimer = null;
       this.saveCurrentPosition();
-    }, 500);
+    }, POSITION_SAVE_DELAY_MS);
   }
 
   private saveCurrentPosition(): void {
@@ -3005,6 +3014,7 @@ export class OmniBookReaderView extends FileView {
     this.selectionPageTurnGuardUntil = 0;
     this.closeLookupPanel();
     this.lastSelection = null;
+    clearInlinedResourceCache();
     if (this.nativeMenuTimer !== null) window.clearTimeout(this.nativeMenuTimer);
     this.nativeMenuTimer = null;
     if (invalidateLoad) this.loadGeneration += 1;

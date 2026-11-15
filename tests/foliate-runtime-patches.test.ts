@@ -5,7 +5,7 @@ import {
   readRegisteredBlobAsText,
   resetBlobUrlRegistryForTests,
 } from "../src/blob-url-registry";
-import { inlineFoliateBlobMarkup } from "../src/foliate-blob-markup-normalizer";
+import { clearInlinedResourceCache, inlineFoliateBlobMarkup } from "../src/foliate-blob-markup-normalizer";
 import {
   installFoliateBlobIframePatch,
   normalizeDesktopFoliateSandboxValue,
@@ -32,6 +32,8 @@ async function settleAsyncReaders(): Promise<void> {
 }
 
 afterEach(() => {
+  clearInlinedResourceCache();
+  vi.restoreAllMocks();
   resetFoliateRuntimePatchesForTests();
   resetBlobUrlRegistryForTests();
   URL.createObjectURL = nativeCreateObjectUrl;
@@ -40,6 +42,39 @@ afterEach(() => {
 });
 
 describe("Foliate mobile runtime compatibility", () => {
+  it("converts each image and font once per book, whatever Blob URL Foliate gives it", async () => {
+    installObjectUrlStubs();
+    installBlobUrlRegistry();
+    const toDataUrl = vi.spyOn(FileReader.prototype, "readAsDataURL");
+    const bytes = () => new Uint8Array([137, 80, 78, 71, 1, 2, 3]);
+    const chapter = (imageUrl: string, fontUrl: string) => `<html><head><style>@font-face { src: url("${fontUrl}"); }</style></head>`
+      + `<body><img src="${imageUrl}"/><img src="${imageUrl}"/><p>Text</p></body></html>`;
+
+    const first = await inlineFoliateBlobMarkup(chapter(
+      URL.createObjectURL(new Blob([bytes()], { type: "image/png" })),
+      URL.createObjectURL(new Blob([new Uint8Array([9, 9, 9])], { type: "font/woff2" })),
+    ), "text/html");
+    const conversionsForFirstChapter = toDataUrl.mock.calls.length;
+    // Revisiting: Foliate recreates the same resources under new Blob URLs.
+    const second = await inlineFoliateBlobMarkup(chapter(
+      URL.createObjectURL(new Blob([bytes()], { type: "image/png" })),
+      URL.createObjectURL(new Blob([new Uint8Array([9, 9, 9])], { type: "font/woff2" })),
+    ), "text/html");
+
+    expect(conversionsForFirstChapter).toBe(2);
+    expect(toDataUrl.mock.calls.length).toBe(2);
+    expect(second.replace(/blob:omni-reader-\d+/g, "")).toBe(first.replace(/blob:omni-reader-\d+/g, ""));
+    expect(second).toContain("data:image/png;base64,");
+    expect(second).toContain("data:font/woff2;base64,");
+
+    clearInlinedResourceCache();
+    await inlineFoliateBlobMarkup(chapter(
+      URL.createObjectURL(new Blob([bytes()], { type: "image/png" })),
+      URL.createObjectURL(new Blob([new Uint8Array([9, 9, 9])], { type: "font/woff2" })),
+    ), "text/html");
+    expect(toDataUrl.mock.calls.length).toBe(4);
+  });
+
   it("retains Blob content after Foliate revokes its object URL", async () => {
     installObjectUrlStubs();
     installBlobUrlRegistry();
