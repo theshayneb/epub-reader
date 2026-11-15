@@ -1,5 +1,6 @@
 import { App, Menu, Modal, Notice, Plugin, TFile, normalizePath, setIcon, type Command } from "obsidian";
-import { AnnotationDocumentService, PROTOCOL_ACTION, isBookLink, type AnnotationDocumentInput } from "./annotation-documents";
+import { AnnotationDocumentService, PROTOCOL_ACTION, isBookLink, type AnnotationDocumentInput, type LayoutChoice } from "./annotation-documents";
+import { chooseColorOrder, chooseNoteLayout } from "./note-layout";
 import { OMNI_BOOK_READER_BOOKSHELF_VIEW_TYPE, OmniBookReaderBookshelfView } from "./bookshelf-view";
 import { ORIGINAL_PLUGIN_ID, loadLegacyPluginData } from "./legacy-plugin-data";
 import { OMNI_BOOK_READER_VIEW_TYPE, OmniBookReaderView } from "./reader-view";
@@ -7,7 +8,8 @@ import { ReadingSyncService } from "./reading-sync";
 import type { AppliedBookChange } from "./reading-sync-model";
 import { OmniBookReaderSettingTab } from "./settings-ui";
 import { ReaderDataStore } from "./store";
-import type { ReaderHighlight, ReaderSettings } from "./types";
+import { HIGHLIGHT_COLOR_VALUES } from "./types";
+import type { BookState, HighlightColor, ReaderHighlight, ReaderSettings } from "./types";
 import { isValidCfi, normalizeVaultPath, progressValue } from "./utils";
 
 function progressText(value: number): string {
@@ -89,6 +91,7 @@ export default class OmniBookReaderPlugin extends Plugin {
       this.app.vault,
       (file) => this.app.fileManager.trashFile(file),
       (sourceFile) => this.findBookNote(sourceFile),
+      (input) => this.chooseBookNoteLayout(input),
     );
     try {
       await this.annotationDocuments.migrateLegacyProtocolLinks(
@@ -178,6 +181,15 @@ export default class OmniBookReaderPlugin extends Plugin {
         return Boolean(view);
       },
     }, "Export highlights and notes from current EPUB");
+
+    this.addUiCommand({
+      id: "change-note-layout",
+      checkCallback: (checking) => {
+        const view = this.getActiveReader();
+        if (!checking && view) void view.changeNoteLayout();
+        return Boolean(view);
+      },
+    }, "Change note layout for this book");
 
     this.addUiCommand({
       id: "export-current-chapter",
@@ -290,6 +302,39 @@ export default class OmniBookReaderPlugin extends Plugin {
         leaf.view.applySettings();
       }
     }
+  }
+
+  /** Asks which layout a book's note uses (and its heading order), the first time it is written. */
+  private async chooseBookNoteLayout(input: AnnotationDocumentInput): Promise<LayoutChoice | null> {
+    const layout = await chooseNoteLayout(this.app, input.title || input.sourceFile.basename);
+    if (!layout) return null;
+    if (layout !== "by-color") return { layout };
+    const order = await this.chooseHeadingOrder(input.state, "Save");
+    return order ? { layout, order } : { layout };
+  }
+
+  /**
+   * Asks for the order of a book's color headings. Undefined when the book uses
+   * fewer than two colors (nothing to order), null when cancelled.
+   */
+  async chooseHeadingOrder(state: BookState, confirmText: string): Promise<HighlightColor[] | null | undefined> {
+    const keys = Object.keys(HIGHLIGHT_COLOR_VALUES) as HighlightColor[];
+    const counts = new Map<HighlightColor, number>();
+    for (const highlight of state.highlights) counts.set(highlight.color, (counts.get(highlight.color) ?? 0) + 1);
+    if (counts.size < 2) return undefined;
+    const current = Array.from(new Set([...(state.colorOrder ?? []), ...keys])).filter((color) => counts.has(color));
+    const order = await chooseColorOrder(this.app, current.map((color) => ({
+      color: HIGHLIGHT_COLOR_VALUES[color].value,
+      label: HIGHLIGHT_COLOR_VALUES[color].name,
+      count: counts.get(color) ?? 0,
+    })), {
+      subject: "this book",
+      defaultOrder: keys.map((color) => HIGHLIGHT_COLOR_VALUES[color].value),
+      confirmText,
+    });
+    if (!order) return null;
+    const byValue = new Map(keys.map((color) => [HIGHLIGHT_COLOR_VALUES[color].value.toLowerCase(), color]));
+    return order.map((value) => byValue.get(value.toLowerCase())).filter((color): color is HighlightColor => Boolean(color));
   }
 
   syncAnnotationDocuments(input: AnnotationDocumentInput): Promise<void> {

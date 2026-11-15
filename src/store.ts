@@ -10,6 +10,8 @@ import type {
   ReadingPosition,
   SourceSignature,
 } from "./types";
+import { isHighlightColor } from "./types";
+import { isNoteLayout } from "./note-layout";
 import { isValidCfi, normalizeVaultPath } from "./utils";
 
 export interface DataAdapter {
@@ -145,6 +147,10 @@ function normalizeBookState(value: unknown): BookState {
       ? input.highlights.map(normalizeHighlight).filter((item): item is ReaderHighlight => item !== null)
       : [],
     ...(annotationDocuments ? { annotationDocuments } : {}),
+    ...(isNoteLayout(input.noteLayout) ? { noteLayout: input.noteLayout } : {}),
+    ...(Array.isArray(input.colorOrder) && input.colorOrder.some(isHighlightColor)
+      ? { colorOrder: Array.from(new Set(input.colorOrder.filter(isHighlightColor))) }
+      : {}),
     ...(readingStats ? { readingStats } : {}),
     ...(input.hiddenFromBookshelf === true ? { hiddenFromBookshelf: true } : {}),
     ...(input.inReadingList === true ? { inReadingList: true } : {}),
@@ -191,6 +197,8 @@ export function mergeReaderData(currentValue: unknown, legacyValue: unknown): Re
       bookmarks: mergeById(legacyState.bookmarks, currentState.bookmarks),
       highlights: mergeById(legacyState.highlights, currentState.highlights),
       annotationDocuments: currentState.annotationDocuments ?? legacyState.annotationDocuments,
+      ...(currentState.noteLayout ?? legacyState.noteLayout ? { noteLayout: currentState.noteLayout ?? legacyState.noteLayout } : {}),
+      ...(currentState.colorOrder ?? legacyState.colorOrder ? { colorOrder: currentState.colorOrder ?? legacyState.colorOrder } : {}),
       readingStats: mergeReadingStats(currentState.readingStats, legacyState.readingStats),
       ...(currentState.hiddenFromBookshelf || legacyState.hiddenFromBookshelf ? { hiddenFromBookshelf: true } : {}),
       ...(currentState.inReadingList || legacyState.inReadingList ? { inReadingList: true } : {}),
@@ -337,6 +345,8 @@ export class ReaderDataStore {
       bookmarks: this.mergeById(existing.bookmarks, oldState.bookmarks),
       highlights: this.mergeById(existing.highlights, oldState.highlights),
       annotationDocuments: oldState.annotationDocuments ?? existing.annotationDocuments,
+      noteLayout: oldState.noteLayout ?? existing.noteLayout,
+      colorOrder: oldState.colorOrder ?? existing.colorOrder,
       hiddenFromBookshelf: oldState.hiddenFromBookshelf ?? existing.hiddenFromBookshelf,
       inReadingList: oldState.inReadingList ?? existing.inReadingList,
       customCoverPath: oldState.customCoverPath ?? existing.customCoverPath,

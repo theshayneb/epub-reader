@@ -1,7 +1,10 @@
 import { normalizePath } from "obsidian";
 import type { TAbstractFile, TFile, TFolder, Vault } from "obsidian";
 import { compare as compareCfi } from "foliate-js/epubcfi.js";
-import type { AnnotationDocuments, BookState, ReaderHighlight } from "./types";
+import type { AnnotationDocuments, BookState, HighlightColor, ReaderHighlight } from "./types";
+import { HIGHLIGHT_COLOR_VALUES } from "./types";
+import { byColorLines, calloutLine, CALLOUT_HEADER, CALLOUT_ITEM_PREFIX } from "./note-layout";
+import type { LayoutEntry, NoteLayout } from "./note-layout";
 
 const LEGACY_GENERATED_MARKER = "<!-- omni-book-reader:generated -->";
 
@@ -12,12 +15,27 @@ type AnnotationDocumentKind = "annotations" | "highlights" | "notes";
 export const ANNOTATION_FOLDER = "Media/Books/Attachments";
 
 /** The callout in each book note that holds the highlights. */
-export const HIGHLIGHTS_CALLOUT = "> > > [!quotenew] Quotes & References";
+export const HIGHLIGHTS_CALLOUT = CALLOUT_HEADER;
 /** Every highlight is one line under the callout, starting with this. */
-export const HIGHLIGHT_LINE_PREFIX = "> > - ";
+export const HIGHLIGHT_LINE_PREFIX = CALLOUT_ITEM_PREFIX;
+
+/**
+ * In the "by-color" layout, the highlights sit between these two lines of the
+ * book note; everything between them is rewritten, everything else is left alone.
+ */
+export const BY_COLOR_START = "%% ePub Reader highlights: start %%";
+export const BY_COLOR_END = "%% ePub Reader highlights: end (the lines between these two are rewritten) %%";
+const BY_COLOR_START_PREFIX = "%% ePub Reader highlights: start";
+const BY_COLOR_END_PREFIX = "%% ePub Reader highlights: end";
 
 /** A leading YAML frontmatter block. */
 const FRONTMATTER_BLOCK = /^---\r?\n[\s\S]*?\r?\n?---[ \t]*(?:\r?\n|$)/;
+
+/** A layout chosen for a book, with its heading order for the by-color layout. */
+export interface LayoutChoice {
+  layout: NoteLayout;
+  order?: HighlightColor[];
+}
 
 export interface AnnotationDocumentInput {
   sourceFile: TFile;
@@ -115,6 +133,21 @@ export function buildCfiLink(vaultName: string, sourcePath: string, cfi: string)
   return `obsidian://${PROTOCOL_ACTION}?${params}`;
 }
 
+/** A highlight in the shared note-layout form (see `note-layout.ts`). */
+function layoutEntry(highlight: ReaderHighlight, sourcePath: string, vaultName: string): LayoutEntry {
+  const chapter = singleLine(highlight.chapter);
+  return {
+    text: singleLine(highlight.text, "(empty excerpt)"),
+    tags: highlight.tags.map(toObsidianTag).filter(Boolean),
+    note: singleLine(highlight.note ?? ""),
+    color: HIGHLIGHT_COLOR_VALUES[highlight.color].value,
+    pages: highlight.page ? [singleLine(highlight.page)] : [],
+    chapter: chapter && chapter !== "Untitled chapter" ? chapter : "",
+    link: buildCfiLink(vaultName, sourcePath, highlight.cfi),
+    plain: Boolean(highlight.lookup),
+  };
+}
+
 /**
  * One highlight as a line under the book note's callout:
  * `> > - passage #quote #tags *-- note* *(Chapter, [p. 14](link))*`.
@@ -122,24 +155,7 @@ export function buildCfiLink(vaultName: string, sourcePath: string, cfi: string)
  * The link back into the book is what marks the line as the plugin's.
  */
 export function renderHighlightLine(highlight: ReaderHighlight, sourcePath: string, vaultName = ""): string {
-  const tags = tagText(highlight);
-  const note = singleLine(highlight.note ?? "");
-  const chapter = singleLine(highlight.chapter);
-  const linkText = highlight.page ? `p. ${singleLine(highlight.page)}` : "Open in book";
-  const location = [
-    chapter && chapter !== "Untitled chapter" ? chapter : "",
-    `[${linkText}](${buildCfiLink(vaultName, sourcePath, highlight.cfi)})`,
-  ].filter(Boolean).join(", ");
-  if (highlight.lookup) {
-    return `${HIGHLIGHT_LINE_PREFIX}${singleLine(highlight.text, "(empty excerpt)")} *${note ? `-- ${note} ` : ""}(${location})*`;
-  }
-  return [
-    `${HIGHLIGHT_LINE_PREFIX}${singleLine(highlight.text, "(empty excerpt)")}`,
-    QUOTE_TAG,
-    tags,
-    note ? `*-- ${note}*` : "",
-    `*(${location})*`,
-  ].filter(Boolean).join(" ");
+  return calloutLine(layoutEntry(highlight, sourcePath, vaultName));
 }
 
 /** Book note list property that collects highlights saved with "Highlight and add tags". */
@@ -182,6 +198,25 @@ export function addQuoteToFrontmatter(content: string, entry: string): string | 
     lines.splice(end, 0, `${indent}- ${item}`);
   }
   return `---\n${lines.join("\n")}\n---\n${text.slice(match[0].length)}`;
+}
+
+/**
+ * The book's highlights in the "by-color" layout: a heading per color, in
+ * `order` and then the remaining colors, highlights in book order under each.
+ */
+export function renderByColorLines(
+  highlights: ReaderHighlight[],
+  sourcePath: string,
+  vaultName = "",
+  order: HighlightColor[] = [],
+): string[] {
+  const colors = Array.from(new Set([...order, ...(Object.keys(HIGHLIGHT_COLOR_VALUES) as HighlightColor[])]));
+  const names = new Map(colors.map((color) => [HIGHLIGHT_COLOR_VALUES[color].value.toLowerCase(), HIGHLIGHT_COLOR_VALUES[color].name]));
+  return byColorLines(
+    [...highlights].sort(comparePosition).map((highlight) => layoutEntry(highlight, sourcePath, vaultName)),
+    colors.map((color) => HIGHLIGHT_COLOR_VALUES[color].value),
+    (value) => names.get(value.toLowerCase()) ?? value,
+  );
 }
 
 /** The book's highlights as callout lines, in book order. */
@@ -232,6 +267,84 @@ export function updateHighlightsCallout(content: string, lines: string[]): strin
   return updated === content.replace(/\r\n?/g, "\n") ? content : updated;
 }
 
+function lineIndex(lines: string[], prefix: string, from = 0): number {
+  for (let index = from; index < lines.length; index += 1) {
+    if ((lines[index] ?? "").trim().startsWith(prefix)) return index;
+  }
+  return -1;
+}
+
+/** The by-color section's first and last line, or null when the note has none. */
+function byColorRegion(lines: string[]): { start: number; end: number } | null {
+  const start = lineIndex(lines, BY_COLOR_START_PREFIX);
+  if (start < 0) return null;
+  const end = lineIndex(lines, BY_COLOR_END_PREFIX, start + 1);
+  return { start, end: end < 0 ? start : end };
+}
+
+/** The layout a book note is already in, or null when it holds no highlights yet. */
+export function detectNoteLayout(content: string): NoteLayout | null {
+  const lines = content.replace(/\r\n?/g, "\n").split("\n");
+  if (byColorRegion(lines)) return "by-color";
+  const header = lines.findIndex((line) => line.trim() === HIGHLIGHTS_CALLOUT.trim());
+  if (header < 0) return null;
+  for (let index = header + 1; index < lines.length && isCalloutListLine(lines[index] ?? ""); index += 1) {
+    if (isPluginLine(lines[index] ?? "")) return "callout";
+  }
+  return null;
+}
+
+/**
+ * Writes the by-color section with `lines`. The plugin's lines under the
+ * quotes callout are removed (and the callout too, when nothing else is in it),
+ * so a book never lists its highlights twice. A new section goes where the
+ * callout was, or at the end of the note.
+ */
+export function updateByColorRegion(content: string, lines: string[]): string {
+  const original = content.replace(/\r\n?/g, "\n");
+  const all = original.split("\n");
+  const block = [BY_COLOR_START, "", ...lines, BY_COLOR_END];
+  while (block.length > 2 && block[block.length - 2] === "") block.splice(block.length - 2, 1);
+  let insertAt = -1;
+  const header = all.findIndex((line) => line.trim() === HIGHLIGHTS_CALLOUT.trim());
+  if (header >= 0) {
+    let end = header + 1;
+    while (end < all.length && isCalloutListLine(all[end] ?? "")) end += 1;
+    const kept = all.slice(header + 1, end).filter((line) => !isPluginLine(line));
+    if (kept.length) {
+      all.splice(header + 1, end - header - 1, ...kept);
+      insertAt = header + 1 + kept.length;
+    } else {
+      all.splice(header, end - header);
+      insertAt = header;
+    }
+  }
+  const region = byColorRegion(all);
+  if (region) {
+    all.splice(region.start, region.end - region.start + 1, ...block);
+  } else if (insertAt >= 0) {
+    const before = insertAt > 0 && (all[insertAt - 1] ?? "").trim() ? [""] : [];
+    const after = insertAt < all.length && (all[insertAt] ?? "").trim() ? [""] : [];
+    all.splice(insertAt, 0, ...before, ...block, ...after);
+  } else {
+    while (all.length && !(all[all.length - 1] ?? "").trim()) all.pop();
+    if (all.length) all.push("");
+    all.push(...block, "");
+  }
+  const updated = all.join("\n");
+  return updated === original ? content : updated;
+}
+
+/** Turns the by-color section back into the quotes callout header, so the callout takes its place. */
+export function replaceByColorRegionWithCallout(content: string): string {
+  const all = content.replace(/\r\n?/g, "\n").split("\n");
+  const region = byColorRegion(all);
+  if (!region) return content;
+  const hasCallout = all.some((line, index) => (index < region.start || index > region.end) && line.trim() === HIGHLIGHTS_CALLOUT.trim());
+  all.splice(region.start, region.end - region.start + 1, ...(hasCallout ? [] : [HIGHLIGHTS_CALLOUT]));
+  return all.join("\n").replace(/\n{3,}/g, "\n\n");
+}
+
 function managedStart(kind: AnnotationDocumentKind): string {
   return `<!-- omni-book-reader:${kind}:start -->`;
 }
@@ -274,6 +387,11 @@ export class AnnotationDocumentService {
     private readonly trashFile: (file: TAbstractFile) => Promise<void>,
     /** Finds the Markdown note named like the EPUB (`Dune.epub` → `Dune.md`). */
     private readonly findBookNote: (sourceFile: TFile) => TFile | null,
+    /**
+     * Asks which layout a book's note uses, the first time highlights are
+     * written for it. Null (window closed) keeps the quotes callout.
+     */
+    private readonly chooseLayout: (input: AnnotationDocumentInput) => Promise<LayoutChoice | null> = async () => null,
   ) {}
 
   sync(input: AnnotationDocumentInput): Promise<void> {
@@ -285,10 +403,23 @@ export class AnnotationDocumentService {
           throw new Error(`No note named "${input.sourceFile.basename}" was found to hold this book's highlights.`);
         }
         const previous = input.state.annotationDocuments;
-        const lines = renderHighlightLines(input.state.highlights, input.sourceFile.path, this.vault.getName());
         const oldFiles = await this.oldDocumentFiles(input, previous, note.path);
         const current = await this.vault.cachedRead(note);
-        let next = updateHighlightsCallout(current, lines);
+        // The layout chosen for this book, else the one its note is already in
+        // (so other devices follow the note), else ask once there is something to write.
+        let layout = input.state.noteLayout ?? detectNoteLayout(current);
+        if (!layout && input.state.highlights.length) {
+          const choice = await this.chooseLayout(input);
+          layout = choice?.layout ?? "callout";
+          if (choice?.order?.length) input.state.colorOrder = choice.order;
+        }
+        if (layout) input.state.noteLayout = layout;
+        let next = layout === "by-color"
+          ? updateByColorRegion(current, renderByColorLines(input.state.highlights, input.sourceFile.path, this.vault.getName(), input.state.colorOrder))
+          : updateHighlightsCallout(
+            replaceByColorRegionWithCallout(current),
+            renderHighlightLines(input.state.highlights, input.sourceFile.path, this.vault.getName()),
+          );
         for (const file of oldFiles) {
           const text = userContent(await this.vault.cachedRead(file));
           if (text && !next.includes(text)) next = `${next.trimEnd()}\n\n${text}\n`;

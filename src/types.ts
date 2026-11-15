@@ -2,7 +2,21 @@ export type ReaderTheme = "auto" | "light" | "dark" | "sepia";
 export type ReaderLayout = "paginated" | "scrolled";
 export type ReaderFont = "obsidian" | "publisher" | "serif" | "sans";
 export type ReaderWidthMode = "standard" | "wide" | "full" | "edge";
+import type { NoteLayout } from "./note-layout";
+
 export type HighlightColor = "yellow" | "green" | "blue" | "pink";
+
+/** Each highlight color's name and value, used by the reader and in book notes. */
+export const HIGHLIGHT_COLOR_VALUES: Record<HighlightColor, { name: string; value: string }> = {
+  yellow: { name: "Yellow", value: "#ffd54f" },
+  green: { name: "Green", value: "#81c784" },
+  blue: { name: "Blue", value: "#64b5f6" },
+  pink: { name: "Pink", value: "#f48fb1" },
+};
+
+export function isHighlightColor(value: unknown): value is HighlightColor {
+  return value === "yellow" || value === "green" || value === "blue" || value === "pink";
+}
 export type HighlightStyle = "highlight" | "underline" | "strikethrough" | "squiggly";
 export type BookshelfDisplayMode = "list" | "grid" | "covers";
 export type BookshelfFilter = "all" | "reading" | "finished" | "reading-list";
@@ -99,6 +113,10 @@ export interface BookState {
   bookmarks: Bookmark[];
   highlights: ReaderHighlight[];
   annotationDocuments?: AnnotationDocuments;
+  /** How highlights are laid out in the book note; unset until chosen (or read from the note). */
+  noteLayout?: NoteLayout;
+  /** The order of color headings when `noteLayout` is "by-color". */
+  colorOrder?: HighlightColor[];
   readingStats?: ReadingStats;
   /** User-managed bookshelf metadata. These fields never affect the EPUB itself. */
   hiddenFromBookshelf?: boolean;

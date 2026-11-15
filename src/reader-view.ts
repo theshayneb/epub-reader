@@ -68,6 +68,7 @@ import type {
   ReadingStats,
   ReaderSettings,
 } from "./types";
+import { chooseNoteLayout } from "./note-layout";
 import type { AppliedBookChange } from "./reading-sync-model";
 import {
   createId,
@@ -151,6 +152,7 @@ export interface ReaderPluginHost extends SettingsHost {
   store: ReaderDataStore;
   updateReaderSettings(patch: Partial<ReaderSettings>): void;
   syncAnnotationDocuments(input: AnnotationDocumentInput): Promise<void>;
+  chooseHeadingOrder(state: BookState, confirmText: string): Promise<HighlightColor[] | null | undefined>;
   recordReadingProgress(sourceFile: TFile, page: string): Promise<void>;
   addQuoteToBookNote(sourceFile: TFile, highlight: ReaderHighlight): Promise<void>;
 }
@@ -715,6 +717,25 @@ export class OmniBookReaderView extends FileView {
     this.updateBookmarkButton();
   }
 
+  /** Switches this book's note between headings by color and the quotes callout. */
+  async changeNoteLayout(): Promise<void> {
+    if (!this.bookState || !this.file) {
+      new Notice("Open an EPUB first");
+      return;
+    }
+    const state = this.bookState;
+    const layout = await chooseNoteLayout(this.app, this.bookTitle || this.file.basename, state.noteLayout ?? null);
+    if (!layout || state !== this.bookState) return;
+    if (layout === "by-color") {
+      const order = await this.plugin.chooseHeadingOrder(state, "Update note");
+      if (order === null) return;
+      if (order) state.colorOrder = order;
+    }
+    state.noteLayout = layout;
+    this.plugin.store.markChanged(0);
+    if (await this.syncAnnotationDocuments()) new Notice("Note layout changed");
+  }
+
   async exportAnnotations(): Promise<void> {
     if (!this.bookState || !this.file) {
       new Notice("Open an EPUB first");
@@ -723,6 +744,11 @@ export class OmniBookReaderView extends FileView {
     if (!this.bookState.highlights.length) {
       new Notice("This book has no highlights to export");
       return;
+    }
+    if (this.bookState.noteLayout === "by-color") {
+      const order = await this.plugin.chooseHeadingOrder(this.bookState, "Export");
+      if (order === null) return;
+      if (order) this.bookState.colorOrder = order;
     }
     if (!await this.syncAnnotationDocuments()) return;
     const path = this.bookState.annotationDocuments?.highlightPath;
