@@ -931,6 +931,7 @@ body.omni-book-reader-immersive-mode {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  max-width: min(560px, calc(100% - 24px));
   padding: 7px;
   background: var(--background-primary-alt);
   border: 1px solid var(--omni-book-reader-border);
@@ -2704,7 +2705,8 @@ body.omni-book-reader-immersive-mode {
   background: var(--text-normal);
 }
 
-.omni-book-reader-selection-primary { color: var(--background-primary); background: var(--text-normal); }
+/* The color used last: tag and note highlight in it. */
+.omni-book-reader-color-button.is-active { box-shadow: 0 0 0 2px var(--background-primary), 0 0 0 4px var(--interactive-accent); }
 
 .omni-book-reader-highlight-group + .omni-book-reader-highlight-group { margin-top: 14px; }
 .omni-book-reader-highlight-group-heading { position: sticky; z-index: 1; top: -8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 34px; margin-bottom: 7px; padding: 6px 8px; color: var(--text-muted); font-family: var(--font-interface); font-size: 12px; font-weight: 700; background: var(--background-secondary); border-radius: var(--radius-m); }

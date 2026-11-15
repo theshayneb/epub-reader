@@ -919,9 +919,9 @@ export class OmniBookReaderView extends FileView {
     this.selectionToolbarEl.createDiv({ cls: "omni-book-reader-toolbar-divider" });
     this.selectionColorsEl = this.selectionToolbarEl.createDiv({ cls: "omni-book-reader-selection-colors" });
     this.renderSelectionColors();
-    const quickHighlight = iconButton(this.selectionToolbarEl, "highlighter", "Highlight with defaults");
-    quickHighlight.addClass("omni-book-reader-selection-primary");
-    quickHighlight.addEventListener("click", () => void this.commitHighlight(this.plugin.getReaderSettings().defaultHighlightColor, this.selectedHighlightStyle));
+    // Same order as PDF Annotator's toolbar: styles, colors (tap to highlight), then tag, note, copy, define, close.
+    // Tag and note highlight in the last color used.
+    this.selectionToolbarEl.createDiv({ cls: "omni-book-reader-toolbar-divider" });
     const addTags = iconButton(this.selectionToolbarEl, "tag", "Highlight and add tags");
     addTags.addEventListener("click", () => void this.commitHighlight(this.plugin.getReaderSettings().defaultHighlightColor, this.selectedHighlightStyle).then((highlight) => {
       if (highlight) this.openHighlightTags(highlight);
@@ -930,6 +930,8 @@ export class OmniBookReaderView extends FileView {
     addNote.addEventListener("click", () => void this.commitHighlight(this.plugin.getReaderSettings().defaultHighlightColor, this.selectedHighlightStyle).then((highlight) => {
       if (highlight) this.openHighlightActions(highlight);
     }));
+    const copy = iconButton(this.selectionToolbarEl, "copy", "Copy selected text");
+    copy.addEventListener("click", () => void this.copySelection());
     const lookUp = iconButton(this.selectionToolbarEl, "book-a", "Define or translate");
     lookUp.addEventListener("click", () => void this.lookUpSelection());
     const cancelSelection = iconButton(this.selectionToolbarEl, "x", "Cancel highlight");
@@ -2273,6 +2275,24 @@ export class OmniBookReaderView extends FileView {
     ).open();
   }
 
+  /** Copies the selected text and clears the selection. */
+  private async copySelection(): Promise<void> {
+    const recent = this.lastSelection && Date.now() - this.lastSelection.at < RECENT_SELECTION_MS ? this.lastSelection.pending : null;
+    const text = (this.pendingSelection ?? recent)?.text.trim();
+    if (!text) {
+      this.showLocalStatus("Select some text first", 4000);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      this.showLocalStatus("Copied");
+    } catch (error) {
+      console.error("[Omni Book Reader] Could not copy the selection", error);
+      this.showLocalStatus("Could not copy the selection", 4000);
+    }
+    this.clearPendingSelection();
+  }
+
   /** Defines the selected English word, or translates other languages, and shows only the result. */
   private async lookUpSelection(): Promise<void> {
     // Android can clear the selection as the toolbar is tapped (dismissing its own Copy/Share bar),
@@ -2402,7 +2422,8 @@ export class OmniBookReaderView extends FileView {
         attr: { type: "button", "aria-label": label, title: label },
       });
       button.setCssProps({ "--highlight-color": choice.value });
-      button.addEventListener("click", () => void this.commitHighlight(choice.value, this.selectedHighlightStyle));
+      button.toggleClass("is-active", choice.value === this.plugin.getReaderSettings().defaultHighlightColor);
+      button.addEventListener("click", () => void this.commitHighlight(choice.value, this.selectedHighlightStyle).then(() => this.renderSelectionColors()));
     }
   }
 
