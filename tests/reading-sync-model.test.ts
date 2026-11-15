@@ -20,7 +20,7 @@ function highlight(id: string, overrides: Partial<ReaderHighlight> = {}): Reader
     cfi: `epubcfi(/6/4!/4/2/1:${id.length})`,
     text: `Text ${id}`,
     chapter: "Chapter 1",
-    color: "yellow",
+    color: "#ffd12d",
     style: "highlight",
     tags: [],
     sectionIndex: 1,
@@ -98,12 +98,12 @@ describe("reading sync model", () => {
     desktop.state.highlights[0]!.note = "Older note";
     desktop.sync(3000, phone);
     phone.state.highlights[0]!.note = "Newer note";
-    phone.state.highlights[0]!.color = "blue";
+    phone.state.highlights[0]!.color = "#6f9fe8";
     phone.sync(4000, desktop);
     desktop.sync(5000, phone);
 
-    expect(desktop.state.highlights[0]).toMatchObject({ note: "Newer note", color: "blue" });
-    expect(phone.state.highlights[0]).toMatchObject({ note: "Newer note", color: "blue" });
+    expect(desktop.state.highlights[0]).toMatchObject({ note: "Newer note", color: "#6f9fe8" });
+    expect(phone.state.highlights[0]).toMatchObject({ note: "Newer note", color: "#6f9fe8" });
   });
 
   it("does not delete or override other devices' data on a device's first sync", () => {
@@ -185,6 +185,43 @@ describe("reading sync model", () => {
     expect(canonicalJson(mergeSyncedBooks(left, right))).toBe(canonicalJson(mergeSyncedBooks(right, left)));
     const once = mergeSyncedBooks(left, right);
     expect(canonicalJson(mergeSyncedBooks(once, right))).toBe(canonicalJson(once));
+  });
+
+  it("syncs a book's color names, added colors, heading order and layout, newest wins", () => {
+    const desktop = new Device("desktop", bookState({ highlights: [highlight("a")] }));
+    const phone = new Device("phone");
+    desktop.sync(2000);
+    phone.sync(2000, desktop);
+
+    Object.assign(desktop.state, {
+      noteLayout: "by-color",
+      colorNames: { "#83cb67": "Costs" },
+      extraColors: ["#ffa94d"],
+      colorOrder: ["#83cb67"],
+      noteSettingsUpdatedAt: 3000,
+    });
+    desktop.sync(3000, phone);
+    phone.sync(3500, desktop);
+    expect(phone.state).toMatchObject({ noteLayout: "by-color", colorNames: { "#83cb67": "Costs" }, extraColors: ["#ffa94d"], colorOrder: ["#83cb67"] });
+
+    // A newer rename on the phone wins on both devices; an older one would not.
+    phone.state.colorNames = { "#83cb67": "Budget" };
+    phone.state.noteSettingsUpdatedAt = 4000;
+    phone.sync(4000, desktop);
+    desktop.sync(5000, phone);
+    expect(desktop.state.colorNames).toEqual({ "#83cb67": "Budget" });
+  });
+
+  it("reads color words from devices that have not updated yet", () => {
+    const parsed = parseSyncDocument(JSON.stringify({
+      format: "omni-book-reader-mod-sync",
+      version: 1,
+      deviceId: "old",
+      updatedAt: 1,
+      books: { [BOOK]: { highlights: { a: { updatedAt: 1, value: { ...highlight("a"), color: "blue" } } }, bookmarks: {}, readingMsByDevice: {}, lastOpenedAt: 0, lastReadAt: 0, furthestFraction: 0 } },
+    }));
+    const entry = parsed?.books[BOOK]?.highlights.a;
+    expect(entry && "value" in entry ? entry.value.color : null).toBe("#6f9fe8");
   });
 
   it("parses its own output and rejects files that are not sync documents", () => {

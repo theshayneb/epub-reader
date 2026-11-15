@@ -23,7 +23,7 @@ function highlight(overrides: Partial<ReaderHighlight> = {}): ReaderHighlight {
     cfi: "epubcfi(/6/2!/4/2:0)",
     text: "The highlighted source text",
     chapter: "Chapter 1",
-    color: "yellow",
+    color: "#ffd12d",
     style: "highlight",
     tags: [],
     sectionIndex: 0,

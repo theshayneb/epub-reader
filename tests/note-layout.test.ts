@@ -24,7 +24,7 @@ function highlight(overrides: Partial<ReaderHighlight> = {}): ReaderHighlight {
     text: "First passage",
     chapter: "Chapter 1",
     page: "3",
-    color: "yellow",
+    color: "#ffd12d",
     style: "highlight",
     tags: [],
     sectionIndex: 0,
@@ -34,7 +34,7 @@ function highlight(overrides: Partial<ReaderHighlight> = {}): ReaderHighlight {
 }
 
 const yellow = highlight({ tags: ["idea"], note: "my note" });
-const green = highlight({ id: "h2", cfi: "epubcfi(/6/4!/4/2:0)", text: "Second passage", page: "9", color: "green", sectionIndex: 1, createdAt: 2 });
+const green = highlight({ id: "h2", cfi: "epubcfi(/6/4!/4/2:0)", text: "Second passage", page: "9", color: "#83cb67", sectionIndex: 1, createdAt: 2 });
 
 describe("shared note layouts", () => {
   it("writes the same by-color item shape as PDF Annotator", () => {
@@ -48,13 +48,13 @@ describe("shared note layouts", () => {
   });
 
   it("orders color headings as chosen, highlights in book order under each", () => {
-    const lines = renderByColorLines([green, yellow], sourceFile.path, "Test Vault", ["green"]);
+    const lines = renderByColorLines([green, yellow], sourceFile.path, "Test Vault", ["#83cb67"]);
     expect(lines).toEqual([
-      "# <span style=\"color: #81c784\">Green</span>",
+      "# <span style=\"color: #83cb67\">Green</span>",
       "",
       `- Second passage *(Chapter 1, [pg. 9](${link(green.cfi)}))*`,
       "",
-      "# <span style=\"color: #ffd54f\">Yellow</span>",
+      "# <span style=\"color: #ffd12d\">Yellow</span>",
       "",
       `- First passage #idea *(Chapter 1, [pg. 3](${link(yellow.cfi)}))*`,
       "\t- [\"] *my note*",
@@ -122,7 +122,7 @@ describe("choosing a layout for a book", () => {
       cachedRead: vi.fn(async (file: typeof note) => file.content),
       getName: vi.fn(() => "Test Vault"),
     };
-    const choose = vi.fn(async () => ({ layout: "by-color" as const, order: ["green" as const] }));
+    const choose = vi.fn(async () => ({ layout: "by-color" as const, order: ["#83cb67"] }));
     const service = new AnnotationDocumentService(vault as never, vi.fn(), () => note as unknown as TFile, choose);
     return { note, choose, service };
   }
@@ -135,7 +135,7 @@ describe("choosing a layout for a book", () => {
     await service.sync({ sourceFile, state: book, title: "Test Book", author: "" });
     expect(choose).toHaveBeenCalledTimes(1);
     expect(book.noteLayout).toBe("by-color");
-    expect(book.colorOrder).toEqual(["green"]);
+    expect(book.colorOrder).toEqual(["#83cb67"]);
     expect(note.content.indexOf("Green")).toBeLessThan(note.content.indexOf("Yellow"));
   });
 
@@ -151,5 +151,17 @@ describe("choosing a layout for a book", () => {
     const { choose, service } = setup("My note.");
     await service.sync({ sourceFile, state: { sourceSignature: { size: 1, mtime: 1 }, bookmarks: [], highlights: [] }, title: "Test Book", author: "" });
     expect(choose).not.toHaveBeenCalled();
+  });
+});
+
+describe("shared highlight colors", () => {
+  it("names headings with the book's own color names, escaped for Markdown", () => {
+    const lines = renderByColorLines([yellow], sourceFile.path, "Test Vault", [], { "#ffd12d": "#Important *now*" });
+    expect(lines[0]).toBe("# <span style=\"color: #ffd12d\">\\#Important \\*now\\*</span>");
+  });
+
+  it("puts a color named \"important\" first by default", () => {
+    const lines = renderByColorLines([yellow, green], sourceFile.path, "Test Vault", [], { "#83cb67": "Important" });
+    expect(lines[0]).toContain("Important");
   });
 });

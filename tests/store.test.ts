@@ -198,10 +198,39 @@ describe("reader data store", () => {
     await store.load();
     const original = { settings: { theme: "sepia", defaultHighlightColor: "blue", syncFolder: "Omni Book Reader/Sync" }, books: {} };
     expect(store.mergeLegacyData([{ path: ".obsidian/plugins/omni-book-reader/data.json", value: original }])).toBe(1);
-    expect(store.settings).toMatchObject({ theme: "sepia", defaultHighlightColor: "blue", syncFolder: "Utilities/Omni Book Reader Mod/Sync" });
+    expect(store.settings).toMatchObject({ theme: "sepia", defaultHighlightColor: "#6f9fe8", syncFolder: "Utilities/Omni Book Reader Mod/Sync" });
 
     const other = { settings: { theme: "dark" }, books: {} };
     store.mergeLegacyData([{ path: ".obsidian/plugins/another-copy/data.json", value: other }]);
     expect(store.settings.theme).toBe("sepia");
+  });
+});
+
+describe("highlight colors from before 1.1.29", () => {
+  it("turns stored color words into the shared palette's values", () => {
+    const data = normalizeReaderData({
+      schemaVersion: 5,
+      settings: { defaultHighlightColor: "pink" },
+      books: {
+        "Books/Old.epub": {
+          sourceSignature: { size: 1, mtime: 1 },
+          bookmarks: [],
+          highlights: [
+            { id: "a", cfi: "epubcfi(/6/2!/4/2:0)", text: "A", chapter: "C", color: "green", style: "highlight", tags: [], sectionIndex: 0, createdAt: 1 },
+            { id: "b", cfi: "epubcfi(/6/2!/4/2:1)", text: "B", chapter: "C", color: "#B197FC", style: "highlight", tags: [], sectionIndex: 0, createdAt: 2 },
+          ],
+          colorOrder: ["blue", "#b197fc"],
+          colorNames: { "#83CB67": "Costs" },
+          noteSettingsUpdatedAt: 5,
+        },
+      },
+      importedLegacyDataPaths: [],
+    });
+    const book = data.books["Books/Old.epub"]!;
+    expect(data.settings.defaultHighlightColor).toBe("#e463a1");
+    expect(book.highlights.map((highlight) => highlight.color)).toEqual(["#83cb67", "#b197fc"]);
+    expect(book.colorOrder).toEqual(["#6f9fe8", "#b197fc"]);
+    expect(book.colorNames).toEqual({ "#83cb67": "Costs" });
+    expect(book.noteSettingsUpdatedAt).toBe(5);
   });
 });

@@ -439,6 +439,23 @@
   font-size: var(--font-ui-smaller);
 }
 
+.omni-book-reader-colors-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.omni-book-reader-colors-button-icon {
+  display: inline-flex;
+  color: var(--interactive-accent);
+}
+
+.omni-book-reader-colors-button-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
 .omni-book-reader-highlight-filter {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -955,10 +972,11 @@ body.omni-book-reader-immersive-mode {
   box-shadow: 0 0 0 1px rgb(0 0 0 / 18%);
 }
 
-.omni-book-reader-color-button.is-yellow { background: #ffd54f; }
-.omni-book-reader-color-button.is-green { background: #81c784; }
-.omni-book-reader-color-button.is-blue { background: #64b5f6; }
-.omni-book-reader-color-button.is-pink { background: #f48fb1; }
+/* Highlight colors are content choices (the book's palette), not interface styling. */
+.omni-book-reader-color-button { background: var(--highlight-color); }
+
+/* The palette's buttons sit directly in the toolbar's own layout. */
+.omni-book-reader-selection-colors { display: contents; }
 
 .omni-book-reader-sidebar-backdrop {
   display: none;
@@ -3003,4 +3021,71 @@ body.is-mobile .omni-book-reader.is-chrome-hidden:not(.is-sidebar-open) .omni-bo
 .note-layout-order-move {
   min-width: 44px;
   min-height: 44px;
+}
+
+/* "Highlight colors" window, shared with ePub Reader (keep identical in both plugins). */
+.hl-colors-help {
+  margin-top: 0;
+  color: var(--text-muted);
+}
+.hl-colors-swatch {
+  display: inline-block;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-inline-end: var(--size-4-2, 8px);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  vertical-align: -2px;
+  background: var(--hl-color);
+}
+.hl-colors-picker {
+  width: 44px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  cursor: pointer;
+}
+.hl-colors-add {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2, 8px);
+  padding: var(--size-4-3, 12px) 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.hl-colors-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2, 8px);
+}
+.hl-colors-preset {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--hl-color);
+  box-shadow: none;
+}
+.hl-colors-preset:hover {
+  background: var(--hl-color);
+  border-color: var(--interactive-accent);
+}
+.hl-colors-custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--size-4-2, 8px);
+}
+.hl-colors-custom input[type="text"] {
+  width: 120px;
+}
+@media (pointer: coarse) {
+  .hl-colors-preset,
+  .hl-colors-picker {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }

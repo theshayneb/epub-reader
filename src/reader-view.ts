@@ -69,6 +69,7 @@ import type {
   ReaderSettings,
 } from "./types";
 import { chooseNoteLayout } from "./note-layout";
+import { colorName, compareColors, HighlightColorsModal, MARK_COLORS, paletteColors } from "./highlight-colors";
 import type { AppliedBookChange } from "./reading-sync-model";
 import {
   createId,
@@ -88,12 +89,11 @@ async function ensureFoliateViewModule(): Promise<void> {
   await foliateViewModulePromise;
 }
 
-const HIGHLIGHT_COLORS: Record<HighlightColor, { label: string; value: string }> = {
-  yellow: { label: "Yellow highlight", value: "#ffd54f" },
-  green: { label: "Green highlight", value: "#81c784" },
-  blue: { label: "Blue highlight", value: "#64b5f6" },
-  pink: { label: "Pink highlight", value: "#f48fb1" },
-};
+/** A color offered in a picker: its value and the name shown for it. */
+interface ColorChoice {
+  value: HighlightColor;
+  label: string;
+}
 
 const HIGHLIGHT_STYLES: Record<HighlightStyle, { label: string; icon: string }> = {
   highlight: { label: "Highlight", icon: "highlighter" },
@@ -132,7 +132,7 @@ function parseTags(value: string): string[] {
 function annotationFor(highlight: ReaderHighlight): { value: string; color: string; style: HighlightStyle } {
   return {
     value: highlight.cfi,
-    color: HIGHLIGHT_COLORS[highlight.color].value,
+    color: highlight.color,
     style: highlight.style,
   };
 }
@@ -243,6 +243,7 @@ class HighlightActionsModal extends Modal {
   constructor(
     app: ReaderPluginHost["app"],
     private readonly highlight: ReaderHighlight,
+    private readonly colors: ColorChoice[],
     private readonly onSave: (edit: HighlightEdit) => Promise<void>,
     private readonly onDelete: () => Promise<void>,
   ) {
@@ -268,9 +269,7 @@ class HighlightActionsModal extends Modal {
     const options = this.contentEl.createDiv({ cls: "omni-book-reader-annotation-options" });
     const colorLabel = options.createEl("label", { text: "Color" });
     const colorSelect = colorLabel.createEl("select", { attr: { "aria-label": "Annotation color" } });
-    for (const [color, definition] of Object.entries(HIGHLIGHT_COLORS) as Array<[HighlightColor, typeof HIGHLIGHT_COLORS[HighlightColor]]>) {
-      colorSelect.createEl("option", { text: definition.label, value: color });
-    }
+    for (const choice of this.colors) colorSelect.createEl("option", { text: choice.label, value: choice.value });
     colorSelect.value = this.highlight.color;
     const styleLabel = options.createEl("label", { text: "Style" });
     const styleSelect = styleLabel.createEl("select", { attr: { "aria-label": "Annotation style" } });
@@ -297,7 +296,7 @@ class HighlightActionsModal extends Modal {
     save.addEventListener("click", () => {
       void this.runAction([cancel, remove, save], async () => this.onSave({
         note: textarea.value,
-        color: colorSelect.value as HighlightColor,
+        color: colorSelect.value,
         style: styleSelect.value as HighlightStyle,
         tags: parseTags(tagsInput.value),
       }));
@@ -549,7 +548,9 @@ export class OmniBookReaderView extends FileView {
   private selectedHighlightStyle: HighlightStyle = "highlight";
   private highlightTagFilter = "";
   private highlightChapterFilter = "";
-  private highlightColorFilter: HighlightColor | "" = "";
+  /** The color to show, or "" for all colors. */
+  private highlightColorFilter: HighlightColor = "";
+  private selectionColorsEl: HTMLElement | null = null;
   private highlightNoteFilter: HighlightNoteFilter = "all";
   private highlightDateFilter: HighlightDateFilter = "all";
   private highlightSort: HighlightSort = "newest";
@@ -732,6 +733,7 @@ export class OmniBookReaderView extends FileView {
       if (order) state.colorOrder = order;
     }
     state.noteLayout = layout;
+    state.noteSettingsUpdatedAt = Date.now();
     this.plugin.store.markChanged(0);
     if (await this.syncAnnotationDocuments()) new Notice("Note layout changed");
   }
@@ -748,7 +750,10 @@ export class OmniBookReaderView extends FileView {
     if (this.bookState.noteLayout === "by-color") {
       const order = await this.plugin.chooseHeadingOrder(this.bookState, "Export");
       if (order === null) return;
-      if (order) this.bookState.colorOrder = order;
+      if (order) {
+        this.bookState.colorOrder = order;
+        this.bookState.noteSettingsUpdatedAt = Date.now();
+      }
     }
     if (!await this.syncAnnotationDocuments()) return;
     const path = this.bookState.annotationDocuments?.highlightPath;
@@ -785,6 +790,10 @@ export class OmniBookReaderView extends FileView {
           if (!highlight.stale) await reader.addAnnotation(annotationFor(highlight)).catch(() => undefined);
         }
       })();
+      this.renderHighlights();
+    }
+    if (change.noteSettingsChanged) {
+      this.renderSelectionColors();
       this.renderHighlights();
     }
     if (change.bookmarksChanged) {
@@ -908,13 +917,8 @@ export class OmniBookReaderView extends FileView {
       styleButtons.set(style, button);
     }
     this.selectionToolbarEl.createDiv({ cls: "omni-book-reader-toolbar-divider" });
-    for (const [color, definition] of Object.entries(HIGHLIGHT_COLORS) as Array<[HighlightColor, typeof HIGHLIGHT_COLORS[HighlightColor]]>) {
-      const button = this.selectionToolbarEl.createEl("button", {
-        cls: `omni-book-reader-color-button is-${color}`,
-        attr: { type: "button", "aria-label": definition.label, title: definition.label },
-      });
-      button.addEventListener("click", () => void this.commitHighlight(color, this.selectedHighlightStyle));
-    }
+    this.selectionColorsEl = this.selectionToolbarEl.createDiv({ cls: "omni-book-reader-selection-colors" });
+    this.renderSelectionColors();
     const quickHighlight = iconButton(this.selectionToolbarEl, "highlighter", "Highlight with defaults");
     quickHighlight.addClass("omni-book-reader-selection-primary");
     quickHighlight.addEventListener("click", () => void this.commitHighlight(this.plugin.getReaderSettings().defaultHighlightColor, this.selectedHighlightStyle));
@@ -1333,6 +1337,7 @@ export class OmniBookReaderView extends FileView {
       this.chapterEl?.setText("Locating…");
       this.renderToc(reader.book.toc ?? []);
       this.renderBookmarks();
+      this.renderSelectionColors();
       this.renderHighlights();
       this.applySettings();
       if (this.bookState.highlights.length || this.bookState.annotationDocuments) {
@@ -1429,7 +1434,7 @@ export class OmniBookReaderView extends FileView {
         squiggly: Overlayer.squiggly,
       };
       detail.draw(renderers[detail.annotation.style ?? "highlight"], {
-        color: detail.annotation.color ?? HIGHLIGHT_COLORS.yellow.value,
+        color: detail.annotation.color ?? MARK_COLORS[0],
       });
     };
     const onShowAnnotation = (event: Event): void => {
@@ -2262,6 +2267,7 @@ export class OmniBookReaderView extends FileView {
     new HighlightActionsModal(
       this.app,
       highlight,
+      this.colorChoices([highlight.color]),
       async (edit) => this.saveHighlightEdit(highlight, edit),
       async () => this.deleteHighlight(highlight),
     ).open();
@@ -2368,6 +2374,72 @@ export class OmniBookReaderView extends FileView {
       });
       // Highlights saved this way are also collected in the book note's Quotes property.
       if (this.file) await this.plugin.addQuoteToBookNote(this.file, highlight);
+    }).open();
+  }
+
+  /** The colors offered for this book: the shared palette, then the colors it added. */
+  private bookPalette(): HighlightColor[] {
+    return paletteColors(this.bookState?.extraColors ?? []);
+  }
+
+  /** Colors for a picker: the book's palette plus `also` (colors in use that left it), named as this book names them. */
+  private colorChoices(also: HighlightColor[] = []): ColorChoice[] {
+    const names = this.bookState?.colorNames ?? {};
+    return Array.from(new Set([...this.bookPalette(), ...also]))
+      .sort((left, right) => compareColors(left, right, names))
+      .map((value) => ({ value, label: colorName(value, names) }));
+  }
+
+  /** The selection toolbar's color buttons for the open book. */
+  private renderSelectionColors(): void {
+    const container = this.selectionColorsEl;
+    if (!container) return;
+    container.empty();
+    for (const choice of this.colorChoices()) {
+      const label = `${choice.label} highlight`;
+      const button = container.createEl("button", {
+        cls: "omni-book-reader-color-button",
+        attr: { type: "button", "aria-label": label, title: label },
+      });
+      button.setCssProps({ "--highlight-color": choice.value });
+      button.addEventListener("click", () => void this.commitHighlight(choice.value, this.selectedHighlightStyle));
+    }
+  }
+
+  /** The "Highlight colors" window (shared with PDF Annotator): name this book's colors and add, change or remove colors. */
+  openHighlightColors(): void {
+    const state = this.bookState;
+    if (!state || !this.file) {
+      new Notice("Open an EPUB first");
+      return;
+    }
+    const used = new Set(state.highlights.map((highlight) => highlight.color.toLowerCase()));
+    new HighlightColorsModal(this.app, {
+      subject: this.bookTitle || this.file.basename,
+      colors: this.colorChoices(Array.from(used)).map((choice) => choice.value),
+      extras: state.extraColors ?? [],
+      used,
+      names: state.colorNames ?? {},
+      onSave: async (names, extras, recolor) => {
+        if (state !== this.bookState) return;
+        state.colorNames = names;
+        state.extraColors = extras;
+        if (state.colorOrder) state.colorOrder = state.colorOrder.map((color) => recolor.get(color) ?? color);
+        state.noteSettingsUpdatedAt = Date.now();
+        for (const highlight of state.highlights) {
+          const next = recolor.get(highlight.color.toLowerCase());
+          if (!next) continue;
+          highlight.color = next;
+          if (this.reader) {
+            await this.reader.deleteAnnotation({ value: highlight.cfi });
+            await this.reader.addAnnotation(annotationFor(highlight));
+          }
+        }
+        this.plugin.store.markChanged(0);
+        this.renderSelectionColors();
+        this.renderHighlights();
+        await this.syncAnnotationDocuments();
+      },
     }).open();
   }
 
@@ -2684,8 +2756,12 @@ export class OmniBookReaderView extends FileView {
     const items = this.bookState?.highlights ?? [];
     this.tabCountEls.get("highlights")?.setText(String(items.length));
     const documents = this.bookState?.annotationDocuments;
+    const actions = this.highlightPanelEl.createDiv({ cls: "omni-book-reader-document-actions" });
+    const colors = actions.createEl("button", { cls: "omni-book-reader-colors-button", attr: { type: "button", "aria-label": "Name and add highlight colors for this book" } });
+    setIcon(colors.createSpan({ cls: "omni-book-reader-colors-button-icon" }), "palette");
+    colors.createSpan({ text: "Highlight colors" });
+    colors.addEventListener("click", () => this.openHighlightColors());
     if (documents) {
-      const actions = this.highlightPanelEl.createDiv({ cls: "omni-book-reader-document-actions" });
       const exportAnnotations = actions.createEl("button", { text: "Export highlights and notes", attr: { type: "button", "aria-label": "Export all highlights and notes" } });
       exportAnnotations.addEventListener("click", () => void this.exportAnnotations());
     }
@@ -2717,12 +2793,12 @@ export class OmniBookReaderView extends FileView {
     });
     const colorSelect = filter.createEl("select", { attr: { "aria-label": "Filter annotations by color" } });
     colorSelect.createEl("option", { text: "All colors", value: "" });
-    for (const [color, definition] of Object.entries(HIGHLIGHT_COLORS) as Array<[HighlightColor, typeof HIGHLIGHT_COLORS[HighlightColor]]>) {
-      colorSelect.createEl("option", { text: definition.label, value: color });
+    for (const choice of this.colorChoices(items.map((highlight) => highlight.color))) {
+      colorSelect.createEl("option", { text: choice.label, value: choice.value });
     }
     colorSelect.value = this.highlightColorFilter;
     colorSelect.addEventListener("change", () => {
-      this.highlightColorFilter = colorSelect.value as HighlightColor | "";
+      this.highlightColorFilter = colorSelect.value;
       this.renderHighlights();
     });
     const noteSelect = filter.createEl("select", { attr: { "aria-label": "Filter annotations by note status" } });
@@ -2788,7 +2864,7 @@ export class OmniBookReaderView extends FileView {
       heading.createSpan({ text: String(highlights.length) });
       for (const highlight of highlights) {
       const row = groupEl.createDiv({ cls: `omni-book-reader-saved-item is-highlight is-style-${highlight.style}${highlight.stale ? " is-stale" : ""}` });
-      row.setCssProps({ "--highlight-color": HIGHLIGHT_COLORS[highlight.color].value });
+      row.setCssProps({ "--highlight-color": highlight.color });
       const open = row.createEl("button", { cls: "omni-book-reader-saved-content", attr: { type: "button" } });
       open.createDiv({ cls: "omni-book-reader-highlight-text", text: highlight.text });
       open.addEventListener("click", () => void this.navigateSavedLocation(highlight));

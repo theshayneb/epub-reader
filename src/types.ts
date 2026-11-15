@@ -3,20 +3,14 @@ export type ReaderLayout = "paginated" | "scrolled";
 export type ReaderFont = "obsidian" | "publisher" | "serif" | "sans";
 export type ReaderWidthMode = "standard" | "wide" | "full" | "edge";
 import type { NoteLayout } from "./note-layout";
+import type { ColorNames } from "./highlight-colors";
 
-export type HighlightColor = "yellow" | "green" | "blue" | "pink";
-
-/** Each highlight color's name and value, used by the reader and in book notes. */
-export const HIGHLIGHT_COLOR_VALUES: Record<HighlightColor, { name: string; value: string }> = {
-  yellow: { name: "Yellow", value: "#ffd54f" },
-  green: { name: "Green", value: "#81c784" },
-  blue: { name: "Blue", value: "#64b5f6" },
-  pink: { name: "Pink", value: "#f48fb1" },
-};
-
-export function isHighlightColor(value: unknown): value is HighlightColor {
-  return value === "yellow" || value === "green" || value === "blue" || value === "pink";
-}
+/**
+ * A highlight color as a lower-case `#rrggbb` value: one of the shared
+ * palette's colors (`highlight-colors.ts`) or one the book added. Data from
+ * before 1.1.29 stored color words ("yellow"); `toHighlightColor` maps them.
+ */
+export type HighlightColor = string;
 export type HighlightStyle = "highlight" | "underline" | "strikethrough" | "squiggly";
 export type BookshelfDisplayMode = "list" | "grid" | "covers";
 export type BookshelfFilter = "all" | "reading" | "finished" | "reading-list";
@@ -115,8 +109,14 @@ export interface BookState {
   annotationDocuments?: AnnotationDocuments;
   /** How highlights are laid out in the book note; unset until chosen (or read from the note). */
   noteLayout?: NoteLayout;
-  /** The order of color headings when `noteLayout` is "by-color". */
+  /** The order of color headings when `noteLayout` is "by-color" (color values). */
   colorOrder?: HighlightColor[];
+  /** This book's names for its highlight colors, keyed by color value. */
+  colorNames?: ColorNames;
+  /** Colors added to the palette for this book. */
+  extraColors?: HighlightColor[];
+  /** When the layout, heading order, color names or added colors last changed; they sync as one unit. */
+  noteSettingsUpdatedAt?: number;
   readingStats?: ReadingStats;
   /** User-managed bookshelf metadata. These fields never affect the EPUB itself. */
   hiddenFromBookshelf?: boolean;

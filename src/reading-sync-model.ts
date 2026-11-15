@@ -7,6 +7,8 @@ import type {
   ReadingStats,
 } from "./types";
 import { ANNOTATION_FOLDER } from "./annotation-documents";
+import { normalizeColorNames, normalizeColorOrder, normalizeExtraColors, toHighlightColor, type ColorNames } from "./highlight-colors";
+import { isNoteLayout, type NoteLayout } from "./note-layout";
 import { isValidCfi, normalizeVaultPath } from "./utils";
 
 /**
@@ -19,6 +21,7 @@ import { isValidCfi, normalizeVaultPath } from "./utils";
  * - position and completion: last-writer-wins by timestamp
  * - reading time: one grow-only counter per device, summed
  * - last opened/read and furthest progress: maximum
+ * - note settings (layout, heading order, color names, added colors): last-writer-wins as one unit
  * - annotation document paths: the book note beats a generated Notes file, which beats an old two-file pair; then the earliest created wins
  */
 
@@ -35,6 +38,15 @@ export interface SyncedCompletion {
   updatedAt: number;
 }
 
+/** A book's note layout, heading order, color names and added colors, which sync together. */
+export interface SyncedNoteSettings {
+  noteLayout?: NoteLayout;
+  colorOrder: string[];
+  colorNames: ColorNames;
+  extraColors: string[];
+  updatedAt: number;
+}
+
 export interface SyncedBook {
   position?: ReadingPosition;
   highlights: Record<string, SyncEntry<SyncedHighlight>>;
@@ -45,6 +57,7 @@ export interface SyncedBook {
   furthestFraction: number;
   completion?: SyncedCompletion;
   annotationDocuments?: AnnotationDocuments;
+  noteSettings?: SyncedNoteSettings;
 }
 
 export interface SyncDocument {
@@ -65,6 +78,8 @@ export interface AppliedBookChange {
   bookmarksChanged: boolean;
   positionChanged: boolean;
   statsChanged: boolean;
+  /** The layout, heading order, color names or added colors changed. */
+  noteSettingsChanged: boolean;
 }
 
 const finite = (value: unknown, fallback = 0): number =>
@@ -143,6 +158,24 @@ function earlierDocuments(left?: AnnotationDocuments, right?: AnnotationDocument
   return leftKey <= rightKey ? left : right;
 }
 
+function localNoteSettings(state: BookState): SyncedNoteSettings | undefined {
+  if (!state.noteSettingsUpdatedAt) return undefined;
+  return {
+    ...(state.noteLayout ? { noteLayout: state.noteLayout } : {}),
+    colorOrder: state.colorOrder ?? [],
+    colorNames: state.colorNames ?? {},
+    extraColors: state.extraColors ?? [],
+    updatedAt: state.noteSettingsUpdatedAt,
+  };
+}
+
+function newerNoteSettings(left?: SyncedNoteSettings, right?: SyncedNoteSettings): SyncedNoteSettings | undefined {
+  if (!left || !right) return left ?? right;
+  if (left.updatedAt !== right.updatedAt) return left.updatedAt > right.updatedAt ? left : right;
+  // Same time: pick deterministically so every device agrees.
+  return canonicalJson(left) >= canonicalJson(right) ? left : right;
+}
+
 function mergeEntries<T>(left: Record<string, SyncEntry<T>>, right: Record<string, SyncEntry<T>>): Record<string, SyncEntry<T>> {
   const merged: Record<string, SyncEntry<T>> = { ...left };
   for (const [id, entry] of Object.entries(right)) {
@@ -160,6 +193,7 @@ export function mergeSyncedBooks(left: SyncedBook, right: SyncedBook): SyncedBoo
   const position = newerPosition(left.position, right.position);
   const completion = newerCompletion(left.completion, right.completion);
   const annotationDocuments = earlierDocuments(left.annotationDocuments, right.annotationDocuments);
+  const noteSettings = newerNoteSettings(left.noteSettings, right.noteSettings);
   return {
     ...(position ? { position } : {}),
     highlights: mergeEntries(left.highlights, right.highlights),
@@ -170,6 +204,7 @@ export function mergeSyncedBooks(left: SyncedBook, right: SyncedBook): SyncedBoo
     furthestFraction: Math.max(left.furthestFraction, right.furthestFraction),
     ...(completion ? { completion } : {}),
     ...(annotationDocuments ? { annotationDocuments } : {}),
+    ...(noteSettings ? { noteSettings } : {}),
   };
 }
 
@@ -264,6 +299,8 @@ export function recordLocalBook(
 
   book.annotationDocuments = earlierDocuments(book.annotationDocuments, state.annotationDocuments);
   if (!book.annotationDocuments) delete book.annotationDocuments;
+  book.noteSettings = newerNoteSettings(book.noteSettings, localNoteSettings(state));
+  if (!book.noteSettings) delete book.noteSettings;
   if (!book.position) delete book.position;
 
   if (known && canonicalJson(known) === canonicalJson(book)) return false;
@@ -274,7 +311,8 @@ export function recordLocalBook(
 
 function isEmptySyncedBook(book: SyncedBook): boolean {
   return !book.position && !Object.keys(book.highlights).length && !Object.keys(book.bookmarks).length
-    && !Object.keys(book.readingMsByDevice).length && !book.lastOpenedAt && !book.completion && !book.annotationDocuments;
+    && !Object.keys(book.readingMsByDevice).length && !book.lastOpenedAt && !book.completion && !book.annotationDocuments
+    && !book.noteSettings;
 }
 
 function sortByCreation<T extends { createdAt: number; id: string }>(items: T[]): T[] {
@@ -294,6 +332,7 @@ export function applySyncedBook(path: string, state: BookState, book: SyncedBook
     bookmarksChanged: false,
     positionChanged: false,
     statsChanged: false,
+    noteSettingsChanged: false,
   };
 
   const previousHighlights = new Map(state.highlights.map((item) => [item.id, item]));
@@ -367,12 +406,21 @@ export function applySyncedBook(path: string, state: BookState, book: SyncedBook
   if (book.annotationDocuments && canonicalJson(book.annotationDocuments) !== canonicalJson(state.annotationDocuments ?? null)) {
     state.annotationDocuments = { ...book.annotationDocuments };
   }
+  const settings = book.noteSettings;
+  if (settings && settings.updatedAt > (state.noteSettingsUpdatedAt ?? 0)) {
+    if (settings.noteLayout) state.noteLayout = settings.noteLayout;
+    state.colorOrder = [...settings.colorOrder];
+    state.colorNames = { ...settings.colorNames };
+    state.extraColors = [...settings.extraColors];
+    state.noteSettingsUpdatedAt = settings.updatedAt;
+    change.noteSettingsChanged = true;
+  }
   return change;
 }
 
 export function hasVisibleChanges(change: AppliedBookChange): boolean {
   return change.addedHighlights.length > 0 || change.removedHighlights.length > 0
-    || change.bookmarksChanged || change.positionChanged || change.statsChanged;
+    || change.bookmarksChanged || change.positionChanged || change.statsChanged || change.noteSettingsChanged;
 }
 
 function parseEntries<T>(value: unknown, parseValue: (input: unknown) => T | null): Record<string, SyncEntry<T>> {
@@ -394,14 +442,13 @@ function parseEntries<T>(value: unknown, parseValue: (input: unknown) => T | nul
 
 function parseHighlight(input: unknown): SyncedHighlight | null {
   if (!isRecord(input) || typeof input.id !== "string" || typeof input.text !== "string" || !isValidCfi(input.cfi)) return null;
-  const colors = new Set(["yellow", "green", "blue", "pink"]);
   const styles = new Set(["highlight", "underline", "strikethrough", "squiggly"]);
   return {
     id: input.id,
     cfi: input.cfi.trim(),
     text: input.text.slice(0, 10000),
     chapter: typeof input.chapter === "string" ? input.chapter : "Untitled chapter",
-    color: colors.has(String(input.color)) ? input.color as SyncedHighlight["color"] : "yellow",
+    color: toHighlightColor(input.color),
     style: styles.has(String(input.style)) ? input.style as SyncedHighlight["style"] : "highlight",
     tags: Array.isArray(input.tags) ? input.tags.filter((tag): tag is string => typeof tag === "string").slice(0, 20) : [],
     sectionIndex: Math.max(0, Math.round(finite(input.sectionIndex))),
@@ -459,6 +506,16 @@ function parseSyncedBook(value: unknown): SyncedBook | null {
     if (highlightPath.toLowerCase().endsWith(".md") && notePath.toLowerCase().endsWith(".md")) {
       book.annotationDocuments = { highlightPath, notePath, createdDate: /^\d{4}-\d{2}-\d{2}$/.test(createdDate) ? createdDate : "" };
     }
+  }
+  if (isRecord(value.noteSettings) && finite(value.noteSettings.updatedAt) > 0) {
+    const settings = value.noteSettings;
+    book.noteSettings = {
+      ...(isNoteLayout(settings.noteLayout) ? { noteLayout: settings.noteLayout } : {}),
+      colorOrder: normalizeColorOrder(settings.colorOrder),
+      colorNames: normalizeColorNames(settings.colorNames),
+      extraColors: normalizeExtraColors(settings.extraColors),
+      updatedAt: finite(settings.updatedAt),
+    };
   }
   return book;
 }

@@ -108,7 +108,7 @@ function highlight(id: string): ReaderHighlight {
     cfi: "epubcfi(/6/4!/4/2/1:0)",
     text: `Text ${id}`,
     chapter: "Chapter 1",
-    color: "yellow",
+    color: "#ffd12d",
     style: "highlight",
     tags: [],
     sectionIndex: 1,

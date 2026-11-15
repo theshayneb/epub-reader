@@ -8,7 +8,7 @@ import { ReadingSyncService } from "./reading-sync";
 import type { AppliedBookChange } from "./reading-sync-model";
 import { OmniBookReaderSettingTab } from "./settings-ui";
 import { ReaderDataStore } from "./store";
-import { HIGHLIGHT_COLOR_VALUES } from "./types";
+import { colorName, orderColors } from "./highlight-colors";
 import type { BookState, HighlightColor, ReaderHighlight, ReaderSettings } from "./types";
 import { isValidCfi, normalizeVaultPath, progressValue } from "./utils";
 
@@ -192,6 +192,15 @@ export default class OmniBookReaderPlugin extends Plugin {
     }, "Change note layout for this book");
 
     this.addUiCommand({
+      id: "name-highlight-colors",
+      checkCallback: (checking) => {
+        const view = this.getActiveReader();
+        if (!checking && view) view.openHighlightColors();
+        return Boolean(view);
+      },
+    }, "Name highlight colors for this book");
+
+    this.addUiCommand({
       id: "export-current-chapter",
       checkCallback: (checking) => {
         const view = this.getActiveReader();
@@ -318,23 +327,21 @@ export default class OmniBookReaderPlugin extends Plugin {
    * fewer than two colors (nothing to order), null when cancelled.
    */
   async chooseHeadingOrder(state: BookState, confirmText: string): Promise<HighlightColor[] | null | undefined> {
-    const keys = Object.keys(HIGHLIGHT_COLOR_VALUES) as HighlightColor[];
     const counts = new Map<HighlightColor, number>();
     for (const highlight of state.highlights) counts.set(highlight.color, (counts.get(highlight.color) ?? 0) + 1);
     if (counts.size < 2) return undefined;
-    const current = Array.from(new Set([...(state.colorOrder ?? []), ...keys])).filter((color) => counts.has(color));
-    const order = await chooseColorOrder(this.app, current.map((color) => ({
-      color: HIGHLIGHT_COLOR_VALUES[color].value,
-      label: HIGHLIGHT_COLOR_VALUES[color].name,
+    const names = state.colorNames ?? {};
+    const colors = orderColors(Array.from(counts.keys()), names, state.colorOrder);
+    const order = await chooseColorOrder(this.app, colors.map((color) => ({
+      color,
+      label: colorName(color, names),
       count: counts.get(color) ?? 0,
     })), {
       subject: "this book",
-      defaultOrder: keys.map((color) => HIGHLIGHT_COLOR_VALUES[color].value),
+      defaultOrder: orderColors(colors, names),
       confirmText,
     });
-    if (!order) return null;
-    const byValue = new Map(keys.map((color) => [HIGHLIGHT_COLOR_VALUES[color].value.toLowerCase(), color]));
-    return order.map((value) => byValue.get(value.toLowerCase())).filter((color): color is HighlightColor => Boolean(color));
+    return order ? order.map((color) => color.toLowerCase()) : null;
   }
 
   syncAnnotationDocuments(input: AnnotationDocumentInput): Promise<void> {

@@ -2,7 +2,7 @@ import { normalizePath } from "obsidian";
 import type { TAbstractFile, TFile, TFolder, Vault } from "obsidian";
 import { compare as compareCfi } from "foliate-js/epubcfi.js";
 import type { AnnotationDocuments, BookState, HighlightColor, ReaderHighlight } from "./types";
-import { HIGHLIGHT_COLOR_VALUES } from "./types";
+import { colorName, orderColors, type ColorNames } from "./highlight-colors";
 import { byColorLines, calloutLine, CALLOUT_HEADER, CALLOUT_ITEM_PREFIX } from "./note-layout";
 import type { LayoutEntry, NoteLayout } from "./note-layout";
 
@@ -140,7 +140,7 @@ function layoutEntry(highlight: ReaderHighlight, sourcePath: string, vaultName: 
     text: singleLine(highlight.text, "(empty excerpt)"),
     tags: highlight.tags.map(toObsidianTag).filter(Boolean),
     note: singleLine(highlight.note ?? ""),
-    color: HIGHLIGHT_COLOR_VALUES[highlight.color].value,
+    color: highlight.color,
     pages: highlight.page ? [singleLine(highlight.page)] : [],
     chapter: chapter && chapter !== "Untitled chapter" ? chapter : "",
     link: buildCfiLink(vaultName, sourcePath, highlight.cfi),
@@ -200,22 +200,29 @@ export function addQuoteToFrontmatter(content: string, entry: string): string | 
   return `---\n${lines.join("\n")}\n---\n${text.slice(match[0].length)}`;
 }
 
+/** A color's name as heading text that Markdown shows as written (never as a tag or formatting). */
+function headingLabel(color: string, names: ColorNames): string {
+  return colorName(color, names)
+    .replace(/[\\`*_{}<>|[\]]/g, "\\$&")
+    .replace(/(^|\s)#/g, "$1\\#");
+}
+
 /**
  * The book's highlights in the "by-color" layout: a heading per color, in
- * `order` and then the remaining colors, highlights in book order under each.
+ * `order` and then the default color order, highlights in book order under each.
  */
 export function renderByColorLines(
   highlights: ReaderHighlight[],
   sourcePath: string,
   vaultName = "",
   order: HighlightColor[] = [],
+  names: ColorNames = {},
 ): string[] {
-  const colors = Array.from(new Set([...order, ...(Object.keys(HIGHLIGHT_COLOR_VALUES) as HighlightColor[])]));
-  const names = new Map(colors.map((color) => [HIGHLIGHT_COLOR_VALUES[color].value.toLowerCase(), HIGHLIGHT_COLOR_VALUES[color].name]));
+  const colors = orderColors(Array.from(new Set(highlights.map((highlight) => highlight.color))), names, order);
   return byColorLines(
     [...highlights].sort(comparePosition).map((highlight) => layoutEntry(highlight, sourcePath, vaultName)),
-    colors.map((color) => HIGHLIGHT_COLOR_VALUES[color].value),
-    (value) => names.get(value.toLowerCase()) ?? value,
+    colors,
+    (color) => headingLabel(color, names),
   );
 }
 
@@ -412,10 +419,17 @@ export class AnnotationDocumentService {
           const choice = await this.chooseLayout(input);
           layout = choice?.layout ?? "callout";
           if (choice?.order?.length) input.state.colorOrder = choice.order;
+          input.state.noteSettingsUpdatedAt = Date.now();
         }
         if (layout) input.state.noteLayout = layout;
         let next = layout === "by-color"
-          ? updateByColorRegion(current, renderByColorLines(input.state.highlights, input.sourceFile.path, this.vault.getName(), input.state.colorOrder))
+          ? updateByColorRegion(current, renderByColorLines(
+            input.state.highlights,
+            input.sourceFile.path,
+            this.vault.getName(),
+            input.state.colorOrder,
+            input.state.colorNames,
+          ))
           : updateHighlightsCallout(
             replaceByColorRegionWithCallout(current),
             renderHighlightLines(input.state.highlights, input.sourceFile.path, this.vault.getName()),

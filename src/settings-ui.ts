@@ -1,7 +1,11 @@
+import { colorName, MARK_COLORS, toHighlightColor } from "./highlight-colors";
 import { App, Modal, Plugin, PluginSettingTab, Setting } from "obsidian";
 import type { SettingDefinitionItem } from "obsidian";
 import { DEFAULT_SETTINGS } from "./defaults";
 import type { ReaderSettings } from "./types";
+
+/** The shared palette as dropdown options (value → name). */
+const PALETTE_OPTIONS: Record<string, string> = Object.fromEntries(MARK_COLORS.map((color) => [color, colorName(color)]));
 
 const SYNC_DESCRIPTION = "Keep reading progress, highlights, notes, bookmarks, and reading time in sync between your devices. "
   + "Each device writes its own file in the sync folder. With Obsidian Sync, turn on \"Sync all other types\" so these .json files are included.";
@@ -166,9 +170,9 @@ function renderSettings(
     .setName("Default highlight color")
     .setDesc("Use this color first when creating an annotation.")
     .addDropdown((dropdown) => dropdown
-      .addOptions({ yellow: "Yellow", green: "Green", blue: "Blue", pink: "Pink" })
+      .addOptions(PALETTE_OPTIONS)
       .setValue(get().defaultHighlightColor)
-      .onChange((defaultHighlightColor) => host.updateReaderSettings({ defaultHighlightColor: defaultHighlightColor as ReaderSettings["defaultHighlightColor"] })));
+      .onChange((defaultHighlightColor) => host.updateReaderSettings({ defaultHighlightColor: toHighlightColor(defaultHighlightColor) })));
 
   new Setting(container)
     .setName("Default annotation style")
@@ -383,7 +387,7 @@ export class OmniBookReaderSettingTab extends PluginSettingTab {
             name: "Default highlight color",
             control: {
               type: "dropdown", key: "defaultHighlightColor",
-              options: { yellow: "Yellow", green: "Green", blue: "Blue", pink: "Pink" },
+              options: PALETTE_OPTIONS,
             },
           },
           {
@@ -475,7 +479,7 @@ export class OmniBookReaderSettingTab extends PluginSettingTab {
         if (value === "comfortable" || value === "compact") this.host.updateReaderSettings({ interfaceDensity: value });
         return;
       case "defaultHighlightColor":
-        if (value === "yellow" || value === "green" || value === "blue" || value === "pink") this.host.updateReaderSettings({ defaultHighlightColor: value });
+        if (typeof value === "string") this.host.updateReaderSettings({ defaultHighlightColor: toHighlightColor(value) });
         return;
       case "defaultHighlightStyle":
         if (value === "highlight" || value === "underline" || value === "strikethrough" || value === "squiggly") this.host.updateReaderSettings({ defaultHighlightStyle: value });

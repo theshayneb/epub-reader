@@ -1,3 +1,4 @@
+import { MARK_COLORS, toHighlightColor } from "./highlight-colors";
 import type { ReaderData, ReaderSettings } from "./types";
 
 export const DEFAULT_SETTINGS: ReaderSettings = {
@@ -18,7 +19,7 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   lastSidebarTab: "toc",
   readerChromeAutoHide: true,
   readingPreset: "comfortable",
-  defaultHighlightColor: "yellow",
+  defaultHighlightColor: MARK_COLORS[0],
   defaultHighlightStyle: "highlight",
   connectAdjacentHighlights: true,
   hideAndroidTextMenu: true,
@@ -37,7 +38,6 @@ const bookshelfFilters = new Set(["all", "reading", "finished", "reading-list"])
 const bookshelfSorts = new Set(["recent", "title", "progress"]);
 const sidebarTabs = new Set(["toc", "highlights", "bookmarks"]);
 const readingPresets = new Set(["custom", "comfortable", "compact", "large"]);
-const highlightColors = new Set(["yellow", "green", "blue", "pink"]);
 const highlightStyles = new Set(["highlight", "underline", "strikethrough", "squiggly"]);
 const interfaceDensities = new Set(["comfortable", "compact"]);
 
@@ -75,8 +75,7 @@ export function normalizeSettings(value: unknown): ReaderSettings {
     readerChromeAutoHide: typeof input.readerChromeAutoHide === "boolean" ? input.readerChromeAutoHide : DEFAULT_SETTINGS.readerChromeAutoHide,
     readingPreset: readingPresets.has(String(input.readingPreset))
       ? input.readingPreset as ReaderSettings["readingPreset"] : DEFAULT_SETTINGS.readingPreset,
-    defaultHighlightColor: highlightColors.has(String(input.defaultHighlightColor))
-      ? input.defaultHighlightColor as ReaderSettings["defaultHighlightColor"] : DEFAULT_SETTINGS.defaultHighlightColor,
+    defaultHighlightColor: toHighlightColor(input.defaultHighlightColor, DEFAULT_SETTINGS.defaultHighlightColor),
     defaultHighlightStyle: highlightStyles.has(String(input.defaultHighlightStyle))
       ? input.defaultHighlightStyle as ReaderSettings["defaultHighlightStyle"] : DEFAULT_SETTINGS.defaultHighlightStyle,
     connectAdjacentHighlights: typeof input.connectAdjacentHighlights === "boolean"

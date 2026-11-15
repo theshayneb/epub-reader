@@ -10,8 +10,8 @@ import type {
   ReadingPosition,
   SourceSignature,
 } from "./types";
-import { isHighlightColor } from "./types";
 import { isNoteLayout } from "./note-layout";
+import { normalizeColorNames, normalizeColorOrder, normalizeExtraColors, toHighlightColor } from "./highlight-colors";
 import { isValidCfi, normalizeVaultPath } from "./utils";
 
 export interface DataAdapter {
@@ -58,7 +58,6 @@ function normalizeHighlight(value: unknown): ReaderHighlight | null {
   if (!value || typeof value !== "object") return null;
   const input = value as Partial<ReaderHighlight>;
   if (!isValidCfi(input.cfi) || typeof input.id !== "string" || typeof input.text !== "string") return null;
-  const colors = new Set(["yellow", "green", "blue", "pink"]);
   const styles = new Set(["highlight", "underline", "strikethrough", "squiggly"]);
   const tags = Array.isArray(input.tags)
     ? Array.from(new Set(input.tags
@@ -72,7 +71,7 @@ function normalizeHighlight(value: unknown): ReaderHighlight | null {
     cfi: input.cfi.trim(),
     text: input.text.slice(0, 10000),
     chapter: typeof input.chapter === "string" ? input.chapter : "Untitled chapter",
-    color: colors.has(String(input.color)) ? input.color as ReaderHighlight["color"] : "yellow",
+    color: toHighlightColor(input.color),
     style: styles.has(String(input.style)) ? input.style as ReaderHighlight["style"] : "highlight",
     tags,
     sectionIndex: Math.max(0, Math.round(finite(input.sectionIndex))),
@@ -124,6 +123,20 @@ function normalizeReadingStats(value: unknown): ReadingStats | undefined {
   };
 }
 
+/** A book's layout-related settings: heading order, color names and added colors, and when they changed. */
+function noteSettings(input: Partial<BookState>): Partial<BookState> {
+  const colorOrder = normalizeColorOrder(input.colorOrder);
+  const colorNames = normalizeColorNames(input.colorNames);
+  const extraColors = normalizeExtraColors(input.extraColors);
+  const updatedAt = finite(input.noteSettingsUpdatedAt);
+  return {
+    ...(colorOrder.length ? { colorOrder } : {}),
+    ...(Object.keys(colorNames).length ? { colorNames } : {}),
+    ...(extraColors.length ? { extraColors } : {}),
+    ...(updatedAt > 0 ? { noteSettingsUpdatedAt: updatedAt } : {}),
+  };
+}
+
 function normalizeBookState(value: unknown): BookState {
   const input = value && typeof value === "object" ? value as Partial<BookState> : {};
   const signature = input.sourceSignature && typeof input.sourceSignature === "object"
@@ -148,9 +161,7 @@ function normalizeBookState(value: unknown): BookState {
       : [],
     ...(annotationDocuments ? { annotationDocuments } : {}),
     ...(isNoteLayout(input.noteLayout) ? { noteLayout: input.noteLayout } : {}),
-    ...(Array.isArray(input.colorOrder) && input.colorOrder.some(isHighlightColor)
-      ? { colorOrder: Array.from(new Set(input.colorOrder.filter(isHighlightColor))) }
-      : {}),
+    ...noteSettings(input),
     ...(readingStats ? { readingStats } : {}),
     ...(input.hiddenFromBookshelf === true ? { hiddenFromBookshelf: true } : {}),
     ...(input.inReadingList === true ? { inReadingList: true } : {}),
@@ -198,7 +209,7 @@ export function mergeReaderData(currentValue: unknown, legacyValue: unknown): Re
       highlights: mergeById(legacyState.highlights, currentState.highlights),
       annotationDocuments: currentState.annotationDocuments ?? legacyState.annotationDocuments,
       ...(currentState.noteLayout ?? legacyState.noteLayout ? { noteLayout: currentState.noteLayout ?? legacyState.noteLayout } : {}),
-      ...(currentState.colorOrder ?? legacyState.colorOrder ? { colorOrder: currentState.colorOrder ?? legacyState.colorOrder } : {}),
+      ...noteSettings(currentState.noteSettingsUpdatedAt ? currentState : legacyState.noteSettingsUpdatedAt ? legacyState : currentState),
       readingStats: mergeReadingStats(currentState.readingStats, legacyState.readingStats),
       ...(currentState.hiddenFromBookshelf || legacyState.hiddenFromBookshelf ? { hiddenFromBookshelf: true } : {}),
       ...(currentState.inReadingList || legacyState.inReadingList ? { inReadingList: true } : {}),
@@ -347,6 +358,9 @@ export class ReaderDataStore {
       annotationDocuments: oldState.annotationDocuments ?? existing.annotationDocuments,
       noteLayout: oldState.noteLayout ?? existing.noteLayout,
       colorOrder: oldState.colorOrder ?? existing.colorOrder,
+      colorNames: oldState.colorNames ?? existing.colorNames,
+      extraColors: oldState.extraColors ?? existing.extraColors,
+      noteSettingsUpdatedAt: oldState.noteSettingsUpdatedAt ?? existing.noteSettingsUpdatedAt,
       hiddenFromBookshelf: oldState.hiddenFromBookshelf ?? existing.hiddenFromBookshelf,
       inReadingList: oldState.inReadingList ?? existing.inReadingList,
       customCoverPath: oldState.customCoverPath ?? existing.customCoverPath,
