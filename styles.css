@@ -439,23 +439,6 @@
   font-size: var(--font-ui-smaller);
 }
 
-.omni-book-reader-colors-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
-.omni-book-reader-colors-button-icon {
-  display: inline-flex;
-  color: var(--interactive-accent);
-}
-
-.omni-book-reader-colors-button-icon svg {
-  width: 14px;
-  height: 14px;
-}
-
 .omni-book-reader-highlight-filter {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3088,6 +3071,156 @@ body.is-mobile .omni-book-reader.is-chrome-hidden:not(.is-sidebar-open) .omni-bo
   .hl-colors-preset,
   .hl-colors-picker {
     min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* The sidebar opens on the right, like PDF Annotator's Annotations panel. */
+.omni-book-reader-sidebar {
+  order: 2;
+  border-right-width: 0;
+  border-left: 0 solid var(--omni-book-reader-border);
+}
+
+.omni-book-reader.is-sidebar-open .omni-book-reader-sidebar {
+  border-right-width: 0;
+  border-left-width: 1px;
+}
+
+@media (max-width: 720px) {
+  .omni-book-reader-sidebar {
+    inset: 0 0 0 auto;
+    border-left-width: 1px;
+    transform: translateX(102%);
+  }
+
+  .omni-book-reader.is-sidebar-open .omni-book-reader-sidebar {
+    transform: translateX(0);
+  }
+
+  .omni-book-reader-sidebar,
+  .omni-book-reader.is-sidebar-open .omni-book-reader-sidebar {
+    border-radius: 28px 0 0 28px;
+  }
+}
+
+.omni-book-reader-document-actions.is-empty {
+  display: none;
+}
+
+/* Highlights panel filter bar, shared with ePub Reader (keep identical in both plugins). */
+.af-bar {
+  display: grid;
+  gap: var(--size-4-2, 8px);
+  padding: var(--size-4-2, 8px) 0;
+}
+.af-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.af-search-icon {
+  position: absolute;
+  inset-inline-start: var(--size-4-2, 8px);
+  display: inline-flex;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.af-search-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.af-search input {
+  width: 100%;
+  padding-inline-start: calc(var(--size-4-2, 8px) * 2 + 14px);
+}
+.af-color-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--size-4-2, 8px);
+}
+.af-colors {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: var(--size-4-1, 4px);
+  min-width: 0;
+}
+.af-chip,
+.af-edit-colors {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-4-1, 4px);
+  height: 28px;
+  padding: 0 var(--size-4-2, 8px);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.af-chip:hover,
+.af-edit-colors:hover {
+  background: var(--background-modifier-hover);
+}
+.af-chip.is-active {
+  border-color: var(--af-color, var(--interactive-accent));
+  background: color-mix(in srgb, var(--af-color, var(--interactive-accent)) 22%, transparent);
+  color: var(--text-normal);
+}
+.af-chip.is-empty {
+  opacity: .5;
+}
+.af-swatch {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--af-color);
+}
+.af-chip-name {
+  max-width: 9em;
+  overflow: hidden;
+  color: var(--text-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.af-edit-colors {
+  flex: none;
+}
+.af-edit-colors-icon {
+  display: inline-flex;
+  color: var(--interactive-accent);
+}
+.af-edit-colors-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.af-menus {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  gap: var(--size-4-1, 4px);
+}
+.af-select {
+  width: 100%;
+  min-width: 0;
+  font-size: var(--font-ui-smaller);
+}
+.af-hidden {
+  display: none;
+}
+.af-count {
+  justify-self: end;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+@media (pointer: coarse) {
+  .af-chip,
+  .af-edit-colors,
+  .af-select {
     min-height: 44px;
   }
 }

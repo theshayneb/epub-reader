@@ -14,6 +14,7 @@ Design documents explain how and why a change is implemented. Product behavior b
 - [`systems/word-lookup.md`](systems/word-lookup.md): defining and translating a selection, the services it calls, and saving results as highlights.
 - [`systems/plugin-identity.md`](systems/plugin-identity.md): separate plugin id, links, views and sync folder, and the one-time import from the original plugin.
 - [`systems/highlight-colors.md`](systems/highlight-colors.md): the palette, color names, added colors and their sync, shared with PDF Annotator through `highlight-colors.ts`.
+- [`systems/highlights-panel.md`](systems/highlights-panel.md): the sidebar on the right and the highlights filter bar shared with PDF Annotator (`annotation-filters.ts`).
 - [`systems/note-layouts.md`](systems/note-layouts.md): the two note layouts shared with PDF Annotator, the shared `note-layout.ts` module, and switching between layouts.
 - [`systems/annotation-documents.md`](systems/annotation-documents.md): one highlights-and-notes file per book, its format, and moving the older two-file layout.
 - [`systems/reading-sync.md`](systems/reading-sync.md): per-device sync files, merge rules, and ordering invariants for syncing reading data across devices.

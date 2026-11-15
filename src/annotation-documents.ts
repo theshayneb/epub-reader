@@ -98,7 +98,8 @@ function companionPaths(title: string, sourceFile: TFile): string[] {
   return [`${name} Notes.md`, `${name}-Notes.md`].map((file) => normalizePath(`${ANNOTATION_FOLDER}/${file}`));
 }
 
-function comparePosition(left: ReaderHighlight, right: ReaderHighlight): number {
+/** Book order: by section, then position within it, then creation. */
+export function comparePosition(left: ReaderHighlight, right: ReaderHighlight): number {
   if (left.sectionIndex !== right.sectionIndex) return left.sectionIndex - right.sectionIndex;
   try {
     const order = compareCfi(left.cfi, right.cfi);

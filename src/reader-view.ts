@@ -11,6 +11,7 @@ import {
   setIcon,
 } from "obsidian";
 import type { AnnotationDocumentInput } from "./annotation-documents";
+import { comparePosition } from "./annotation-documents";
 import { annotationValueAtPoint } from "./annotation-hit-test";
 import { exportChapterMarkdown } from "./chapter-export";
 import { readEpubBinaryCandidates } from "./epub-binary";
@@ -69,7 +70,8 @@ import type {
   ReaderSettings,
 } from "./types";
 import { chooseNoteLayout } from "./note-layout";
-import { colorName, compareColors, HighlightColorsModal, MARK_COLORS, paletteColors } from "./highlight-colors";
+import { colorName, compareColors, hasCustomColorName, HighlightColorsModal, MARK_COLORS, paletteColors } from "./highlight-colors";
+import { DEFAULT_FILTERS, FilterBar, matchesDate, type AnnotationFilters } from "./annotation-filters";
 import type { AppliedBookChange } from "./reading-sync-model";
 import {
   createId,
@@ -103,9 +105,6 @@ const HIGHLIGHT_STYLES: Record<HighlightStyle, { label: string; icon: string }> 
 };
 
 type SidebarTab = "toc" | "search" | "bookmarks" | "highlights";
-type HighlightNoteFilter = "all" | "with-note" | "without-note";
-type HighlightDateFilter = "all" | "today" | "7d" | "30d";
-type HighlightSort = "newest" | "oldest" | "chapter";
 
 interface PendingSelection {
   cfi: string;
@@ -546,14 +545,12 @@ export class OmniBookReaderView extends FileView {
   private currentLocation: FoliateLocation = {};
   private pendingSelection: PendingSelection | null = null;
   private selectedHighlightStyle: HighlightStyle = "highlight";
-  private highlightTagFilter = "";
-  private highlightChapterFilter = "";
-  /** The color to show, or "" for all colors. */
-  private highlightColorFilter: HighlightColor = "";
+  /** The highlights list's filters (shared with PDF Annotator's Annotations panel). */
+  private highlightFilters: AnnotationFilters = { ...DEFAULT_FILTERS };
+  private highlightFilterBar: FilterBar | null = null;
+  private highlightActionsEl: HTMLElement | null = null;
+  private highlightListEl: HTMLElement | null = null;
   private selectionColorsEl: HTMLElement | null = null;
-  private highlightNoteFilter: HighlightNoteFilter = "all";
-  private highlightDateFilter: HighlightDateFilter = "all";
-  private highlightSort: HighlightSort = "newest";
   private sidebarOpen = !Platform.isMobile;
   private activeTab: SidebarTab = "toc";
   private searchTimer: number | null = null;
@@ -821,7 +818,7 @@ export class OmniBookReaderView extends FileView {
     this.rootEl = root;
 
     const header = root.createDiv({ cls: "omni-book-reader-header" });
-    const sidebarToggle = iconButton(header, "panel-left", "Toggle reader sidebar");
+    const sidebarToggle = iconButton(header, "panel-right", "Toggle reader sidebar");
     sidebarToggle.addEventListener("click", () => this.toggleSidebar());
     const headings = header.createDiv({ cls: "omni-book-reader-headings" });
     this.titleEl = headings.createDiv({ cls: "omni-book-reader-title", text: "ePub Reader" });
@@ -1200,7 +1197,7 @@ export class OmniBookReaderView extends FileView {
       button.addEventListener("click", () => this.activateTab(tab));
       this.tabButtons.set(tab, button);
     }
-    const closeSidebar = iconButton(tabs, "panel-left-close", "Hide sidebar");
+    const closeSidebar = iconButton(tabs, "panel-right-close", "Hide sidebar");
     closeSidebar.addClass("omni-book-reader-sidebar-close");
     closeSidebar.addEventListener("click", () => this.setSidebarOpen(false));
 
@@ -2772,126 +2769,104 @@ export class OmniBookReaderView extends FileView {
   }
 
   private renderHighlights(): void {
-    if (!this.highlightPanelEl) return;
-    this.highlightPanelEl.empty();
+    const panel = this.highlightPanelEl;
+    if (!panel) return;
+    if (!this.highlightFilterBar || !panel.contains(this.highlightFilterBar.el)) {
+      panel.empty();
+      this.highlightActionsEl = panel.createDiv({ cls: "omni-book-reader-document-actions" });
+      this.highlightFilterBar = new FilterBar(panel, {
+        searchPlaceholder: "Search highlights",
+        onChange: (filters) => {
+          this.highlightFilters = filters;
+          this.renderHighlights();
+        },
+        onEditColors: () => this.openHighlightColors(),
+      });
+      this.highlightListEl = panel.createDiv({ cls: "omni-book-reader-highlight-list" });
+    }
     const items = this.bookState?.highlights ?? [];
     this.tabCountEls.get("highlights")?.setText(String(items.length));
-    const documents = this.bookState?.annotationDocuments;
-    const actions = this.highlightPanelEl.createDiv({ cls: "omni-book-reader-document-actions" });
-    const colors = actions.createEl("button", { cls: "omni-book-reader-colors-button", attr: { type: "button", "aria-label": "Name and add highlight colors for this book" } });
-    setIcon(colors.createSpan({ cls: "omni-book-reader-colors-button-icon" }), "palette");
-    colors.createSpan({ text: "Highlight colors" });
-    colors.addEventListener("click", () => this.openHighlightColors());
-    if (documents) {
+    const actions = this.highlightActionsEl;
+    actions?.empty();
+    if (actions && this.bookState?.annotationDocuments) {
       const exportAnnotations = actions.createEl("button", { text: "Export highlights and notes", attr: { type: "button", "aria-label": "Export all highlights and notes" } });
       exportAnnotations.addEventListener("click", () => void this.exportAnnotations());
     }
+    actions?.toggleClass("is-empty", !actions.childElementCount);
+
+    const names = this.bookState?.colorNames ?? {};
+    const inOrder = [...items].sort(comparePosition);
+    const counts = new Map<string, number>();
+    const tags = new Set<string>();
+    for (const highlight of items) {
+      counts.set(highlight.color, (counts.get(highlight.color) ?? 0) + 1);
+      for (const tag of highlight.tags) tags.add(tag);
+    }
+    const chapters = Array.from(new Set(inOrder.map((highlight) => highlight.chapter)));
+    const colors = this.colorChoices(Array.from(counts.keys()));
+    // Drop filters whose color, tag or chapter no longer has highlights.
+    const filters = this.highlightFilters;
+    if (filters.color && !colors.some((choice) => choice.value === filters.color)) filters.color = "";
+    if (filters.tag && !tags.has(filters.tag)) filters.tag = "";
+    if (filters.section && !chapters.includes(filters.section)) filters.section = "";
+    const query = filters.query.trim().toLowerCase();
+    const filtered = inOrder.filter((highlight) => {
+      if (filters.color && highlight.color !== filters.color) return false;
+      if (filters.tag && !highlight.tags.includes(filters.tag)) return false;
+      if (filters.section && highlight.chapter !== filters.section) return false;
+      if (filters.note === "with-note" && !highlight.note?.trim()) return false;
+      if (filters.note === "without-note" && highlight.note?.trim()) return false;
+      if (!matchesDate(highlight.createdAt, filters.date)) return false;
+      if (!query) return true;
+      return [highlight.text, highlight.note ?? "", highlight.chapter, ...highlight.tags].join("\u0000").toLowerCase().includes(query);
+    });
+    if (filters.sort === "newest") filtered.sort((left, right) => right.createdAt - left.createdAt);
+    else if (filters.sort === "oldest") filtered.sort((left, right) => left.createdAt - right.createdAt);
+    else if (filters.sort === "color") filtered.sort((left, right) => compareColors(left.color, right.color, names) || comparePosition(left, right));
+    this.highlightFilterBar.update({
+      filters,
+      colors: colors.map((choice) => ({ value: choice.value, label: choice.label, count: counts.get(choice.value) ?? 0, named: hasCustomColorName(choice.value, names) })),
+      tags: Array.from(tags).sort((left, right) => left.localeCompare(right, "en-US")),
+      sections: chapters,
+      sectionWord: "chapters",
+      pageNotes: false,
+      shown: filtered.length,
+      total: items.length,
+    });
+
+    const list = this.highlightListEl;
+    if (!list) return;
+    list.empty();
     if (!items.length) {
-      this.highlightPanelEl.createDiv({ cls: "omni-book-reader-empty", text: "Select text to create a highlight" });
+      list.createDiv({ cls: "omni-book-reader-empty", text: "Select text to create a highlight" });
       return;
     }
-    const availableTags = Array.from(new Set(items.flatMap((highlight) => highlight.tags))).sort((left, right) => left.localeCompare(right, "en-US"));
-    const availableChapters = Array.from(new Set(items.map((highlight) => highlight.chapter))).sort((left, right) => left.localeCompare(right, "en-US"));
-    if (this.highlightTagFilter && !availableTags.includes(this.highlightTagFilter)) this.highlightTagFilter = "";
-    if (this.highlightChapterFilter && !availableChapters.includes(this.highlightChapterFilter)) this.highlightChapterFilter = "";
-    const filter = this.highlightPanelEl.createDiv({ cls: "omni-book-reader-highlight-filter" });
-    const tagSelect = filter.createEl("select", { attr: { "aria-label": "Filter annotations by tag" } });
-    tagSelect.createEl("option", { text: "All tags", value: "" });
-    for (const tag of availableTags) tagSelect.createEl("option", { text: tag, value: tag });
-    tagSelect.value = this.highlightTagFilter;
-    tagSelect.disabled = !availableTags.length;
-    tagSelect.addEventListener("change", () => {
-      this.highlightTagFilter = tagSelect.value;
-      this.renderHighlights();
-    });
-    const chapterSelect = filter.createEl("select", { attr: { "aria-label": "Filter annotations by chapter" } });
-    chapterSelect.createEl("option", { text: "All chapters", value: "" });
-    for (const chapter of availableChapters) chapterSelect.createEl("option", { text: chapter, value: chapter });
-    chapterSelect.value = this.highlightChapterFilter;
-    chapterSelect.addEventListener("change", () => {
-      this.highlightChapterFilter = chapterSelect.value;
-      this.renderHighlights();
-    });
-    const colorSelect = filter.createEl("select", { attr: { "aria-label": "Filter annotations by color" } });
-    colorSelect.createEl("option", { text: "All colors", value: "" });
-    for (const choice of this.colorChoices(items.map((highlight) => highlight.color))) {
-      colorSelect.createEl("option", { text: choice.label, value: choice.value });
-    }
-    colorSelect.value = this.highlightColorFilter;
-    colorSelect.addEventListener("change", () => {
-      this.highlightColorFilter = colorSelect.value;
-      this.renderHighlights();
-    });
-    const noteSelect = filter.createEl("select", { attr: { "aria-label": "Filter annotations by note status" } });
-    for (const [value, text] of [["all", "All note statuses"], ["with-note", "With notes"], ["without-note", "Without notes"]]) {
-      noteSelect.createEl("option", { value, text });
-    }
-    noteSelect.value = this.highlightNoteFilter;
-    noteSelect.addEventListener("change", () => {
-      this.highlightNoteFilter = noteSelect.value as HighlightNoteFilter;
-      this.renderHighlights();
-    });
-    const sortSelect = filter.createEl("select", { attr: { "aria-label": "Sort annotations" } });
-    for (const [value, text] of [["newest", "Newest"], ["oldest", "Oldest"], ["chapter", "By chapter"]]) {
-      sortSelect.createEl("option", { value, text });
-    }
-    sortSelect.value = this.highlightSort;
-    sortSelect.addEventListener("change", () => {
-      this.highlightSort = sortSelect.value as HighlightSort;
-      this.renderHighlights();
-    });
-    const dateSelect = filter.createEl("select", { attr: { "aria-label": "Filter annotations by creation date" } });
-    for (const [value, text] of [["all", "All time"], ["today", "Today"], ["7d", "Last 7 days"], ["30d", "Last 30 days"]]) {
-      dateSelect.createEl("option", { value, text });
-    }
-    dateSelect.value = this.highlightDateFilter;
-    dateSelect.addEventListener("change", () => {
-      this.highlightDateFilter = dateSelect.value as HighlightDateFilter;
-      this.renderHighlights();
-    });
-    const now = Date.now();
-    const dayStart = new Date().setHours(0, 0, 0, 0);
-    const minimumDate = this.highlightDateFilter === "today" ? dayStart
-      : this.highlightDateFilter === "7d" ? now - 7 * 86400000
-        : this.highlightDateFilter === "30d" ? now - 30 * 86400000
-          : 0;
-    const filteredItems = items
-      .filter((highlight) => !this.highlightTagFilter || highlight.tags.includes(this.highlightTagFilter))
-      .filter((highlight) => !this.highlightChapterFilter || highlight.chapter === this.highlightChapterFilter)
-      .filter((highlight) => !this.highlightColorFilter || highlight.color === this.highlightColorFilter)
-      .filter((highlight) => this.highlightNoteFilter === "all"
-        || (this.highlightNoteFilter === "with-note" ? Boolean(highlight.note?.trim()) : !highlight.note?.trim()))
-      .filter((highlight) => !minimumDate || highlight.createdAt >= minimumDate)
-      .sort((left, right) => this.highlightSort === "oldest"
-        ? left.createdAt - right.createdAt
-        : this.highlightSort === "chapter"
-          ? left.chapter.localeCompare(right.chapter, "en-US") || left.createdAt - right.createdAt
-          : right.createdAt - left.createdAt);
-    filter.createSpan({ text: `${filteredItems.length}/${items.length}` });
-    if (!filteredItems.length) {
-      this.highlightPanelEl.createDiv({ cls: "omni-book-reader-empty", text: "No annotations match these filters" });
+    if (!filtered.length) {
+      list.createDiv({ cls: "omni-book-reader-empty", text: "No annotations match these filters" });
       return;
     }
+    // In reading order, highlights are grouped under their chapter; other orders are one list.
     const groups = new Map<string, ReaderHighlight[]>();
-    for (const highlight of filteredItems) {
-      const group = groups.get(highlight.chapter) ?? [];
-      group.push(highlight);
-      groups.set(highlight.chapter, group);
+    for (const highlight of filtered) {
+      const key = filters.sort === "reading" ? highlight.chapter : "";
+      groups.set(key, [...(groups.get(key) ?? []), highlight]);
     }
     for (const [chapter, highlights] of groups) {
-      const groupEl = this.highlightPanelEl.createDiv({ cls: "omni-book-reader-highlight-group" });
-      const heading = groupEl.createDiv({ cls: "omni-book-reader-highlight-group-heading" });
-      heading.createSpan({ text: chapter });
-      heading.createSpan({ text: String(highlights.length) });
+      const groupEl = list.createDiv({ cls: "omni-book-reader-highlight-group" });
+      if (chapter) {
+        const heading = groupEl.createDiv({ cls: "omni-book-reader-highlight-group-heading" });
+        heading.createSpan({ text: chapter });
+        heading.createSpan({ text: String(highlights.length) });
+      }
       for (const highlight of highlights) {
-      const row = groupEl.createDiv({ cls: `omni-book-reader-saved-item is-highlight is-style-${highlight.style}${highlight.stale ? " is-stale" : ""}` });
-      row.setCssProps({ "--highlight-color": highlight.color });
-      const open = row.createEl("button", { cls: "omni-book-reader-saved-content", attr: { type: "button" } });
-      open.createDiv({ cls: "omni-book-reader-highlight-text", text: highlight.text });
-      open.addEventListener("click", () => void this.navigateSavedLocation(highlight));
-      const note = iconButton(row, "notebook-pen", highlight.note ? "Edit annotation and note" : "Edit annotation and add note");
-      note.toggleClass("is-active", Boolean(highlight.note));
-      note.addEventListener("click", () => this.openHighlightActions(highlight));
+        const row = groupEl.createDiv({ cls: `omni-book-reader-saved-item is-highlight is-style-${highlight.style}${highlight.stale ? " is-stale" : ""}` });
+        row.setCssProps({ "--highlight-color": highlight.color });
+        const open = row.createEl("button", { cls: "omni-book-reader-saved-content", attr: { type: "button" } });
+        open.createDiv({ cls: "omni-book-reader-highlight-text", text: highlight.text });
+        open.addEventListener("click", () => void this.navigateSavedLocation(highlight));
+        const note = iconButton(row, "notebook-pen", highlight.note ? "Edit annotation and note" : "Edit annotation and add note");
+        note.toggleClass("is-active", Boolean(highlight.note));
+        note.addEventListener("click", () => this.openHighlightActions(highlight));
       }
     }
   }
@@ -3178,12 +3153,7 @@ export class OmniBookReaderView extends FileView {
     }
     this.bookState = null;
     this.currentLocation = {};
-    this.highlightTagFilter = "";
-    this.highlightChapterFilter = "";
-    this.highlightColorFilter = "";
-    this.highlightNoteFilter = "all";
-    this.highlightDateFilter = "all";
-    this.highlightSort = "newest";
+    this.highlightFilters = { ...DEFAULT_FILTERS };
     this.fixedLayout = false;
     this.bookAuthor = "";
     this.loadedFileKey = "";
