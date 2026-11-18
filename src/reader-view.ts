@@ -1,3 +1,4 @@
+import { isReadingMove } from "./reading-position";
 import { Overlayer } from "foliate-js/overlayer.js";
 import { FootnoteHandler } from "foliate-js/footnotes.js";
 import {
@@ -168,6 +169,9 @@ export interface ReaderPluginHost extends SettingsHost {
  * doing it while the next chapter loads. Closing the book still saves immediately.
  */
 const POSITION_SAVE_DELAY_MS = 2000;
+
+/** How long after restoring or following another device's position the reader's moves are not reading. */
+const PASSIVE_NAVIGATION_MS = 4000;
 
 /** Shown where a book note would be written on a device that leaves book notes to another device. */
 const NOTES_ON_OTHER_DEVICE = "Book notes are updated by your device with background tasks on.";
@@ -545,6 +549,10 @@ export class OmniBookReaderView extends FileView {
   private progressTimer: number | null = null;
   /** Position received from another device; the next save keeps its timestamp so devices do not echo it back as newer. */
   private syncedPosition: { position: ReadingPosition; until: number } | null = null;
+  /** The reader moved because the person read on (turned a page, scrolled, followed a link) since the last position save. */
+  private readMovedSinceSave = false;
+  /** Until then, navigation is the reader's own doing (restoring the saved place, following another device), not reading. */
+  private passiveNavigationUntil = 0;
   private statsTimer: number | null = null;
   private lookupInFlight = false;
   private lookupPanel: LookupPanel | null = null;
@@ -799,6 +807,7 @@ export class OmniBookReaderView extends FileView {
     if (change.positionChanged && position && position.cfi !== this.currentLocation.cfi && !this.pendingSelection
       && reader.resolveNavigation(position.cfi)) {
       this.syncedPosition = { position: { ...position }, until: Date.now() + 3000 };
+      this.passiveNavigationUntil = Date.now() + PASSIVE_NAVIGATION_MS;
       void Promise.resolve(reader.goTo(position.cfi)).then(() => {
         this.showLocalStatus("Moved to your latest reading position from another device");
       }).catch(() => {
@@ -1371,6 +1380,15 @@ export class OmniBookReaderView extends FileView {
 
   private attachReaderEvents(reader: FoliateViewElement): void {
     const footnotes = new FootnoteHandler();
+    // Foliate's renderer says why it moved. Re-layouts (resize, fonts, settings) report "anchor" and must not
+    // count as reading, or a device that merely shows a book would claim the newest position.
+    const renderer = reader.renderer as unknown as EventTarget | undefined;
+    const onRendererRelocate = (event: Event): void => {
+      const reason = (event as CustomEvent<{ reason?: string }>).detail?.reason;
+      if (isReadingMove(reason, Date.now() < this.passiveNavigationUntil)) this.readMovedSinceSave = true;
+    };
+    renderer?.addEventListener?.("relocate", onRendererRelocate);
+    this.cleanupCallbacks.push(() => renderer?.removeEventListener?.("relocate", onRendererRelocate));
     const onRelocate = (event: Event): void => this.onRelocate((event as CustomEvent<FoliateLocation>).detail);
     const onLoad = (event: Event): void => {
       const detail = (event as CustomEvent<{ doc: Document; index: number }>).detail;
@@ -1446,6 +1464,7 @@ export class OmniBookReaderView extends FileView {
   }
 
   private async restorePosition(reader: FoliateViewElement, state: BookState): Promise<void> {
+    this.passiveNavigationUntil = Date.now() + PASSIVE_NAVIGATION_MS;
     const cfi = state.position?.cfi?.trim();
     if (cfi) {
       try {
@@ -2562,6 +2581,11 @@ export class OmniBookReaderView extends FileView {
     const synced = this.syncedPosition && Date.now() <= this.syncedPosition.until ? this.syncedPosition.position : null;
     this.syncedPosition = null;
     const page = this.currentPageLabel();
+    const stored = this.bookState.position;
+    // Only reading moves the position forward in time. Opening the book, a re-layout or following another
+    // device leaves the saved position (and its time) alone, so it never overrides newer reading elsewhere.
+    if (!this.readMovedSinceSave && !synced && stored) return;
+    this.readMovedSinceSave = false;
     this.bookState.position = {
       cfi: this.currentLocation.cfi,
       fraction: this.currentLocation.fraction ?? 0,

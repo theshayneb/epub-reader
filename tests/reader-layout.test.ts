@@ -47,3 +47,4 @@ describe("reflowable reader layout", () => {
     expect(resolveWidthMode({ ...DEFAULT_SETTINGS, widthMode: "edge" }, 1000)).toEqual({ contentWidth: 1000, pageMargin: 0 });
   });
 });
+
