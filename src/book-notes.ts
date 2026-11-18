@@ -103,6 +103,10 @@ export interface BookNoteReport {
   failed: Array<{ path: string; error: unknown }>;
   /** Books with reading data on this device but no note named like the EPUB. */
   withoutNote: string[];
+  /** Notes whose `Quotes` property is in a form that cannot be updated safely. */
+  quotesUnreadable: string[];
+  /** Highlights saved as quotes, across all books with a note. */
+  quoteCount: number;
 }
 
 /**
@@ -202,7 +206,7 @@ export class BookNoteUpdater {
       this.migrated = true;
       await this.host.migrateLegacyLinks();
     }
-    const report: BookNoteReport = { updated: [], failed: [], withoutNote: [] };
+    const report: BookNoteReport = { updated: [], failed: [], withoutNote: [], quotesUnreadable: [], quoteCount: 0 };
     let stateChanged = false;
     for (const [path, state] of this.host.store.liveBooks()) {
       const file = this.host.app.vault.getAbstractFileByPath(path);
@@ -215,7 +219,7 @@ export class BookNoteUpdater {
       // One book's note failing must never keep the others from being updated.
       try {
         const before = await this.host.app.vault.cachedRead(note);
-        if (await this.updateNote(file, note, state)) stateChanged = true;
+        if (await this.updateNote(file, note, state, report)) stateChanged = true;
         if (await this.host.app.vault.cachedRead(note) !== before) report.updated.push(note.path);
       } catch (error) {
         console.error(`[Omni Book Reader] Could not update the book note for ${path}`, error);
@@ -227,17 +231,21 @@ export class BookNoteUpdater {
   }
 
   /** Brings one book note up to date. True when the book state itself was changed (layout, paths). */
-  private async updateNote(file: TFile, note: TFile, state: BookState): Promise<boolean> {
+  private async updateNote(file: TFile, note: TFile, state: BookState, report: BookNoteReport): Promise<boolean> {
     const before = JSON.stringify([state.annotationDocuments, state.noteLayout, state.colorOrder]);
     if (state.highlights.length || state.annotationDocuments || state.noteLayout) {
       await this.host.annotationDocuments.sync({ sourceFile: file, state, title: file.basename, author: "", interactive: false });
     }
     await this.host.annotationDocuments.updateNote(note, (content) => {
       let next = content;
-      const quotes = this.quotesFor(file.path, state, content);
-      if (quotes) {
-        const updated = setQuotesInFrontmatter(next, quotes);
-        if (updated !== null) next = updated;
+      const current = readQuotesFromFrontmatter(content);
+      if (current === null) {
+        report.quotesUnreadable.push(note.path);
+      } else {
+        const quotes = this.quotesFor(file.path, state, current, report);
+        const updated = quotes ? setQuotesInFrontmatter(next, quotes) : next;
+        if (updated === null) report.quotesUnreadable.push(note.path);
+        else next = updated;
       }
       const page = state.position?.page;
       if (page) next = setProgressInFrontmatter(next, progressValue(page));
@@ -247,10 +255,9 @@ export class BookNoteUpdater {
   }
 
   /** The note's new `Quotes` list, or null when nothing about it is managed here. */
-  private quotesFor(path: string, state: BookState, content: string): string[] | null {
+  private quotesFor(path: string, state: BookState, current: string[], report: BookNoteReport): string[] | null {
     const records = this.loadQuoteRecords();
     const record = records[path] ?? { generated: [], adopted: [] };
-    const current = readQuotesFromFrontmatter(content) ?? [];
     const currentSet = new Set(current);
     const adopted = new Set(record.adopted);
     // Highlights added to Quotes before highlights carried the flag: adopt them once, so deleting
@@ -262,6 +269,7 @@ export class BookNoteUpdater {
       .filter((highlight) => highlight.quote || adopted.has(highlight.id))
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((highlight) => quoteEntry(highlight)))];
+    report.quoteCount += wanted.length;
     const liveIds = new Set(state.highlights.map((highlight) => highlight.id));
     const nextRecord: QuoteRecord = { generated: wanted, adopted: [...adopted].filter((id) => liveIds.has(id)).sort() };
     if (JSON.stringify(nextRecord) !== JSON.stringify(record)) {

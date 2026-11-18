@@ -412,6 +412,8 @@ export default class OmniBookReaderPlugin extends Plugin {
       ? `Updated ${report.updated.length} book ${report.updated.length === 1 ? "note" : "notes"}.`
       : "Book notes are already up to date."];
     if (report.failed.length) parts.push(`Could not update ${report.failed.length}: ${report.failed.map((item) => item.path).join(", ")}.`);
+    parts.push(`${report.quoteCount} ${report.quoteCount === 1 ? "highlight is" : "highlights are"} saved as quotes.`);
+    if (report.quotesUnreadable.length) parts.push(`Could not read Quotes in ${report.quotesUnreadable.join(", ")}; write it as a list, one entry per line.`);
     if (report.withoutNote.length) parts.push(`No note found for ${report.withoutNote.length} ${report.withoutNote.length === 1 ? "book" : "books"}: ${report.withoutNote.join(", ")}.`);
     new Notice(parts.join(" "), 10000);
   }

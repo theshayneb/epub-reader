@@ -173,19 +173,86 @@ export function quoteEntry(highlight: ReaderHighlight): string {
   return [passage, QUOTE_TAG, tagText(highlight)].filter(Boolean).join(" ");
 }
 
-/** The `Quotes` entries in a note's frontmatter (block list form), or null when it has none or another form. */
-export function readQuotesFromFrontmatter(content: string): string[] | null {
-  const text = content.replace(/\r\n?/g, "\n");
-  const match = /^---\n([\s\S]*?)\n?---[ \t]*(?:\n|$)/.exec(text);
-  if (!match) return null;
-  const lines = (match[1] ?? "").split("\n");
-  const keyIndex = lines.findIndex((line) => new RegExp(`^${QUOTES_PROPERTY}:\\s*$`).test(line));
-  if (keyIndex < 0) return null;
-  const entries: string[] = [];
-  for (let index = keyIndex + 1; index < lines.length && /^\s*-(\s|$)/.test(lines[index] ?? ""); index++) {
-    entries.push(unquoteYaml((lines[index] ?? "").replace(/^\s*-\s*/, "").trim()));
+const FRONTMATTER = /^---\n([\s\S]*?)\n?---[ \t]*(?:\n|$)/;
+
+/** Where the `Quotes` property sits among the frontmatter lines, and what it holds. */
+interface QuotesProperty {
+  /** The key as written (Obsidian treats property names case-insensitively). */
+  key: string;
+  start: number;
+  /** One past the last line of the property. */
+  end: number;
+  values: string[];
+  indent: string;
+}
+
+/**
+ * Finds `Quotes` in frontmatter lines, in any of the forms Obsidian or a person writes: a block list
+ * (`- "…"` lines), an empty value, `[]`, a one-line `[a, "b"]` list, or a single value. Undefined when
+ * absent, null when it is in a form this cannot read safely (a list spread over several `[…]` lines).
+ */
+function findQuotesProperty(lines: readonly string[]): QuotesProperty | null | undefined {
+  const keyPattern = new RegExp(`^(${QUOTES_PROPERTY}):(.*)$`, "i");
+  const start = lines.findIndex((line) => keyPattern.test(line));
+  if (start < 0) return undefined;
+  const match = keyPattern.exec(lines[start] ?? "");
+  const key = match?.[1] ?? QUOTES_PROPERTY;
+  const inline = (match?.[2] ?? "").trim();
+  if (!inline || inline === "~" || inline === "null") {
+    let end = start + 1;
+    let indent = "  ";
+    const values: string[] = [];
+    while (end < lines.length && /^\s*-(\s|$)/.test(lines[end] ?? "")) {
+      indent = /^(\s*)-/.exec(lines[end] ?? "")?.[1] ?? indent;
+      const value = unquoteYaml((lines[end] ?? "").replace(/^\s*-\s*/, "").trim());
+      if (value) values.push(value);
+      end += 1;
+    }
+    return { key, start, end, values, indent };
   }
-  return entries;
+  if (inline.startsWith("[")) {
+    if (!inline.endsWith("]")) return null;
+    return { key, start, end: start + 1, values: splitFlowList(inline.slice(1, -1)), indent: "  " };
+  }
+  return { key, start, end: start + 1, values: [unquoteYaml(inline)], indent: "  " };
+}
+
+/** Splits the inside of a one-line YAML `[…]` list, respecting quoted items. */
+function splitFlowList(body: string): string[] {
+  const items: string[] = [];
+  let current = "";
+  let quote = "";
+  for (let index = 0; index < body.length; index++) {
+    const char = body[index] ?? "";
+    if (quote) {
+      current += char;
+      if (char === "\\" && quote === "\"") {
+        current += body[++index] ?? "";
+      } else if (char === quote) {
+        if (quote === "'" && body[index + 1] === "'") current += body[++index] ?? "";
+        else quote = "";
+      }
+    } else if (char === "\"" || char === "'") {
+      quote = char;
+      current += char;
+    } else if (char === ",") {
+      items.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  if (current.trim()) items.push(current.trim());
+  return items.map(unquoteYaml).filter(Boolean);
+}
+
+/** The `Quotes` entries in a note's frontmatter, [] when it has none, or null when unreadable. */
+export function readQuotesFromFrontmatter(content: string): string[] | null {
+  const match = FRONTMATTER.exec(content.replace(/\r\n?/g, "\n"));
+  if (!match) return [];
+  const property = findQuotesProperty((match[1] ?? "").split("\n"));
+  if (property === null) return null;
+  return property?.values ?? [];
 }
 
 function unquoteYaml(value: string): string {
@@ -214,31 +281,28 @@ export function mergeQuotes(current: readonly string[], wanted: readonly string[
 }
 
 /**
- * Sets the `Quotes` block list in a note's frontmatter to `entries` (double-quoted YAML strings), leaving
- * everything else as it is; removes the property when `entries` is empty. Null when `Quotes` exists in a
- * form this cannot rewrite safely (inline `[…]` or a single value).
+ * Sets `Quotes` in a note's frontmatter to `entries`, written as a block list of double-quoted YAML strings
+ * (so the `#` tags stay part of each value), leaving everything else as it is; removes the property when
+ * `entries` is empty. A one-line form (`[]`, `[a, b]`, a single value) is rewritten as a block list.
+ * Unchanged content when it already holds exactly these entries; null when `Quotes` cannot be read safely.
  */
 export function setQuotesInFrontmatter(content: string, entries: readonly string[]): string | null {
   const items = entries.map((entry) => JSON.stringify(entry.replace(/\s+/g, " ").trim()));
   const text = content.replace(/\r\n?/g, "\n");
-  const match = /^---\n([\s\S]*?)\n?---[ \t]*(?:\n|$)/.exec(text);
+  const match = FRONTMATTER.exec(text);
   if (!match) return items.length ? `---\n${QUOTES_PROPERTY}:\n${items.map((item) => `  - ${item}`).join("\n")}\n---\n${text}` : content;
   const lines = (match[1] ?? "").split("\n").filter((line, index, all) => line || index < all.length - 1);
-  const keyIndex = lines.findIndex((line) => new RegExp(`^${QUOTES_PROPERTY}:\\s*$`).test(line));
-  if (keyIndex < 0) {
-    if (lines.some((line) => new RegExp(`^${QUOTES_PROPERTY}:`).test(line))) return null;
+  const property = findQuotesProperty(lines);
+  if (property === null) return null;
+  if (!property) {
     if (!items.length) return content;
     lines.push(`${QUOTES_PROPERTY}:`, ...items.map((item) => `  - ${item}`));
   } else {
-    let end = keyIndex + 1;
-    let indent = "  ";
-    while (end < lines.length && /^\s*-(\s|$)/.test(lines[end] ?? "")) {
-      indent = /^(\s*)-/.exec(lines[end] ?? "")?.[1] ?? indent;
-      end += 1;
-    }
-    const existing = lines.slice(keyIndex + 1, end).map((line) => unquoteYaml(line.replace(/^\s*-\s*/, "").trim()));
-    if (existing.length === entries.length && existing.every((entry, index) => entry === entries[index])) return content;
-    lines.splice(keyIndex, end - keyIndex, ...(items.length ? [`${QUOTES_PROPERTY}:`, ...items.map((item) => `${indent}- ${item}`)] : []));
+    const blockForm = !(lines[property.start] ?? "").slice(property.key.length + 1).trim();
+    const sameEntries = property.values.length === entries.length && property.values.every((entry, index) => entry === entries[index]);
+    if (sameEntries && (blockForm || !entries.length)) return content;
+    lines.splice(property.start, property.end - property.start,
+      ...(items.length ? [`${property.key}:`, ...items.map((item) => `${property.indent}- ${item}`)] : []));
   }
   return `---\n${lines.join("\n")}\n---\n${text.slice(match[0].length)}`;
 }

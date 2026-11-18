@@ -84,6 +84,16 @@ describe("book notes on the background device", () => {
     updater.stop();
   });
 
+  it("fills a Quotes property Obsidian left as an empty one-line list", async () => {
+    const { files, store, updater } = await setup("---\nQuotes: []\n---\n# Dune\n", true);
+    store.ensureBook(BOOK, { size: 1, mtime: 1 }).highlights.push(highlight("a", { quote: true, tags: ["insightful"] }));
+    updater.start();
+    const report = await updater.updateNow();
+    expect(files.get(NOTE)).toContain('Quotes:\n  - "Passage a #quote #insightful"\n---');
+    expect(report?.quoteCount).toBe(1);
+    updater.stop();
+  });
+
   it("adopts Quotes entries written before highlights carried the quote flag", async () => {
     const { files, store, updater } = await setup("---\nQuotes:\n  - \"Passage a #quote\"\n---\n", true);
     const state = store.ensureBook(BOOK, { size: 1, mtime: 1 });

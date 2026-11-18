@@ -273,7 +273,17 @@ describe("book note highlights", () => {
     expect(setQuotesInFrontmatter(note, [])).toBe("---\nstatus: reading\n---\n# Book\n");
     expect(setQuotesInFrontmatter("# Book\n", ["A #quote"])).toBe('---\nQuotes:\n  - "A #quote"\n---\n# Book\n');
     expect(setQuotesInFrontmatter("# Book\n", [])).toBe("# Book\n");
-    expect(setQuotesInFrontmatter("---\nQuotes: [a, b]\n---\n", ["A"])).toBeNull();
+    // One-line forms Obsidian or a person writes are read and rewritten as a list.
+    expect(setQuotesInFrontmatter("---\nQuotes: []\nstatus: x\n---\n", ["A #quote"])).toBe('---\nQuotes:\n  - "A #quote"\nstatus: x\n---\n');
+    expect(setQuotesInFrontmatter("---\nQuotes: []\n---\n", [])).toBe("---\nQuotes: []\n---\n");
+    expect(readQuotesFromFrontmatter("---\nQuotes: [hand, \"B, with comma #quote\", 'it''s']\n---\n")).toEqual(["hand", "B, with comma #quote", "it's"]);
+    expect(setQuotesInFrontmatter("---\nQuotes: [a, b]\n---\n", ["a", "b", "C"])).toBe('---\nQuotes:\n  - "a"\n  - "b"\n  - "C"\n---\n');
+    expect(readQuotesFromFrontmatter("---\nquotes: one\n---\n")).toEqual(["one"]);
+    expect(setQuotesInFrontmatter("---\nquotes:\n---\n", ["A"])).toBe('---\nquotes:\n  - "A"\n---\n');
+    expect(readQuotesFromFrontmatter("# none\n")).toEqual([]);
+    // A list spread over several bracket lines is left alone.
+    expect(setQuotesInFrontmatter("---\nQuotes: [a,\n  b]\n---\n", ["A"])).toBeNull();
+    expect(readQuotesFromFrontmatter("---\nQuotes: [a,\n  b]\n---\n")).toBeNull();
     expect(setQuotesInFrontmatter("x", ["back\\slash #quote"])).toBe('---\nQuotes:\n  - "back\\\\slash #quote"\n---\nx');
     expect(quoteEntry(highlight({ text: 'He said "go"', tags: ["big idea"] }))).toBe("He said 'go' #quote #big_idea");
   });
