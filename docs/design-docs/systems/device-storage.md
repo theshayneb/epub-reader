@@ -31,7 +31,9 @@ Migration: the first start of 1.1.38 on a device seeds its book storage and devi
 
 Book notes (the highlights callout or by-colour region, `Progress` and `Quotes`) are written only by the device with "Run background tasks on this device" on (`src/book-notes.ts`), so each note has one writer:
 
-- It waits for Obsidian Sync to settle after startup and every resume: no vault changes for 60 seconds and the core Sync plugin not reporting that it is syncing (undocumented internals, guarded; anything unexpected counts as idle).
+- It waits for Obsidian Sync to settle after startup and every resume: no vault changes for 60 seconds and the core Sync plugin not reporting that it is syncing (undocumented internals, guarded; anything unexpected counts as idle). It waits at most 5 minutes, because other plugins may change the vault more often than once a minute; 1.1.38 had no such limit and could wait forever. Once settled, it stays settled until the next resume.
+- Each book is updated on its own: one note that cannot be written never stops the others (in 1.1.38 it stopped the whole pass).
+- **ePub Reader: Update book notes now** re-reads every device's sync file, updates all notes at once and reports how many changed, which failed and which books have no note.
 - It then updates every book that has a note, after changes from any device: 5 seconds after an edit, at most every 2 minutes for reading progress. Each write is skipped when the note already says the same thing. Local edits on that device update the note at once.
 - `Progress` comes from the newest synced position's page label.
 - `Quotes` is derived: highlights saved with "Highlight and add tags" carry `quote: true`. The background device adds, updates and removes their entries, wherever the highlight was made, edited or deleted. It remembers (in local storage) which entries it generated and removes only those; hand-written entries stay. Entries added by older versions are adopted when they match a highlight.

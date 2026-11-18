@@ -9,8 +9,13 @@ import { progressValue } from "./utils";
 /** Book note property that holds the page last read. */
 export const PROGRESS_PROPERTY = "Progress";
 
-/** Obsidian Sync counts as settled once the vault has been quiet this long after startup or resume. */
+/** Obsidian Sync counts as settled once the vault has been quiet this long after startup or resume... */
 export const SETTLE_QUIET_MS = 60_000;
+/**
+ * ...or, at the latest, this long after startup or resume: other plugins may change the vault more often
+ * than once a minute, and Sync's own status is read from undocumented internals.
+ */
+export const SETTLE_MAX_WAIT_MS = 5 * 60_000;
 /** Book notes follow highlight edits after this pause... */
 const EDIT_DELAY_MS = 5_000;
 /** ...and reading progress at most this often. */
@@ -53,27 +58,51 @@ export function coreSyncBusy(app: App): boolean {
 }
 
 /**
- * Tracks when Obsidian Sync has settled: no vault changes for `SETTLE_QUIET_MS` since startup or the
- * last resume, and the core Sync plugin not syncing.
+ * Tracks when Obsidian Sync has settled after startup or the last resume: no vault changes for
+ * `SETTLE_QUIET_MS` and the core Sync plugin not syncing, or `SETTLE_MAX_WAIT_MS` passed. Once settled it
+ * stays settled until the next resume, so later changes from other devices are handled promptly.
  */
 export class SyncSettleTracker {
+  private startedAt: number;
   private quietSince: number;
+  private settled = false;
 
   constructor(private readonly busy: () => boolean, private readonly now: () => number = Date.now) {
-    this.quietSince = now();
+    this.startedAt = this.quietSince = now();
   }
 
-  /** A vault file changed, or the app started or resumed. */
+  /** The app started or came back to the foreground: wait for Sync again. */
+  restart(): void {
+    this.startedAt = this.quietSince = this.now();
+    this.settled = false;
+  }
+
+  /** A vault file changed. */
   touch(): void {
     this.quietSince = this.now();
   }
 
   /** Milliseconds until settled, or 0 when settled now. */
   remaining(): number {
-    const left = this.quietSince + SETTLE_QUIET_MS - this.now();
-    if (left > 0) return left;
-    return this.busy() ? SETTLE_QUIET_MS / 4 : 0;
+    if (this.settled) return 0;
+    const now = this.now();
+    const capped = this.startedAt + SETTLE_MAX_WAIT_MS - now;
+    const quiet = this.quietSince + SETTLE_QUIET_MS - now;
+    let left = Math.min(capped, quiet > 0 ? quiet : this.busy() ? SETTLE_QUIET_MS / 4 : 0);
+    if (left <= 0) {
+      this.settled = true;
+      left = 0;
+    }
+    return left;
   }
+}
+
+/** What one pass over the book notes did. */
+export interface BookNoteReport {
+  updated: string[];
+  failed: Array<{ path: string; error: unknown }>;
+  /** Books with reading data on this device but no note named like the EPUB. */
+  withoutNote: string[];
 }
 
 /**
@@ -100,7 +129,7 @@ export class BookNoteUpdater {
 
   start(): void {
     this.unsubscribe ??= this.host.store.onChange((kind) => this.schedule(kind === "edit" ? EDIT_DELAY_MS : PROGRESS_DELAY_MS));
-    this.settle.touch();
+    this.settle.restart();
     this.schedule(0);
   }
 
@@ -114,7 +143,7 @@ export class BookNoteUpdater {
 
   /** The app came back to the foreground: Sync may now bring a backlog, so wait for it again. */
   resumed(): void {
-    this.settle.touch();
+    this.settle.restart();
     if (this.timer !== null) this.schedule(0);
   }
 
@@ -129,8 +158,8 @@ export class BookNoteUpdater {
   }
 
   /** Writes now (after a local edit made on this device), without waiting for the debounce. */
-  updateNow(): Promise<void> {
-    if (!this.enabled) return Promise.resolve();
+  updateNow(): Promise<BookNoteReport | null> {
+    if (!this.enabled) return Promise.resolve(null);
     if (this.timer !== null) window.clearTimeout(this.timer);
     this.timer = null;
     this.dueAt = 0;
@@ -155,29 +184,46 @@ export class BookNoteUpdater {
     }, Math.max(0, delayMs));
   }
 
-  private enqueuePass(): Promise<void> {
-    this.running = this.running
+  private enqueuePass(): Promise<BookNoteReport | null> {
+    const run = this.running
       .catch(() => undefined)
       .then(() => this.pass())
-      .catch((error) => console.error("[Omni Book Reader] Could not update book notes", error));
-    return this.running;
+      .catch((error: unknown) => {
+        console.error("[Omni Book Reader] Could not update book notes", error);
+        return null;
+      });
+    this.running = run.then(() => undefined);
+    return run;
   }
 
-  private async pass(): Promise<void> {
-    if (!this.enabled) return;
+  private async pass(): Promise<BookNoteReport | null> {
+    if (!this.enabled) return null;
     if (!this.migrated) {
       this.migrated = true;
       await this.host.migrateLegacyLinks();
     }
+    const report: BookNoteReport = { updated: [], failed: [], withoutNote: [] };
     let stateChanged = false;
     for (const [path, state] of this.host.store.liveBooks()) {
       const file = this.host.app.vault.getAbstractFileByPath(path);
       if (!(file instanceof TFile)) continue;
       const note = this.host.findBookNote(file);
-      if (!note) continue;
-      if (await this.updateNote(file, note, state)) stateChanged = true;
+      if (!note) {
+        if (state.position?.page || state.highlights.length) report.withoutNote.push(path);
+        continue;
+      }
+      // One book's note failing must never keep the others from being updated.
+      try {
+        const before = await this.host.app.vault.cachedRead(note);
+        if (await this.updateNote(file, note, state)) stateChanged = true;
+        if (await this.host.app.vault.cachedRead(note) !== before) report.updated.push(note.path);
+      } catch (error) {
+        console.error(`[Omni Book Reader] Could not update the book note for ${path}`, error);
+        report.failed.push({ path, error });
+      }
     }
     if (stateChanged) this.host.store.markChanged(0, "progress");
+    return report;
   }
 
   /** Brings one book note up to date. True when the book state itself was changed (layout, paths). */

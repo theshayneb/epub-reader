@@ -274,6 +274,10 @@ export default class OmniBookReaderPlugin extends Plugin {
       id: "sync-reading-data",
       callback: () => void this.syncReadingDataNow(),
     }, "Sync reading data now");
+    this.addUiCommand({
+      id: "update-book-notes",
+      callback: () => void this.updateBookNotesNow(),
+    }, "Update book notes now");
 
     this.registerEvent(this.app.workspace.on("file-menu", (menu: Menu, file) => {
       if (!(file instanceof TFile) || file.extension.toLowerCase() !== "epub") return;
@@ -390,6 +394,26 @@ export default class OmniBookReaderPlugin extends Plugin {
     await this.annotationDocuments.sync(input);
     await this.bookNotes.updateNow();
     return true;
+  }
+
+  /** Reads every device's sync files, then updates all book notes now and says what happened. */
+  private async updateBookNotesNow(): Promise<void> {
+    if (!this.store.runBackgroundTasks) {
+      new Notice("Book notes are updated by your device with background tasks on. To update them here, turn on running background tasks on this device in ePub Reader settings.");
+      return;
+    }
+    if (this.store.settings.syncEnabled) await this.readingSync.start();
+    const report = await this.bookNotes.updateNow();
+    if (!report) {
+      new Notice("Could not update book notes. See the developer console for details.");
+      return;
+    }
+    const parts = [report.updated.length
+      ? `Updated ${report.updated.length} book ${report.updated.length === 1 ? "note" : "notes"}.`
+      : "Book notes are already up to date."];
+    if (report.failed.length) parts.push(`Could not update ${report.failed.length}: ${report.failed.map((item) => item.path).join(", ")}.`);
+    if (report.withoutNote.length) parts.push(`No note found for ${report.withoutNote.length} ${report.withoutNote.length === 1 ? "book" : "books"}: ${report.withoutNote.join(", ")}.`);
+    new Notice(parts.join(" "), 10000);
   }
 
   /** Turns background tasks (book note updates) on or off for this device only. */

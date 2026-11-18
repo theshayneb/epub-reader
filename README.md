@@ -46,7 +46,7 @@ With Obsidian Sync, turn on **Sync all other types** in Obsidian Sync's settings
 
 Display, typography and other reader preferences are kept on each device and never synced. Only **Merge adjacent highlights** and the reading sync switch and folder are shared through the plugin's `data.json`, merged setting by setting.
 
-Book notes (the highlights callout, `Progress` and `Quotes`) are written only by the device with **Run background tasks on this device** turned on (on by default on desktop, off on mobile), once Obsidian Sync has been quiet for a minute. Highlights made on a phone or tablet reach the note when that device receives their sync file. Keep it on for one always-on device. Every device must run version 1.1.38 or later.
+Book notes (the highlights callout, `Progress` and `Quotes`) are written only by the device with **Run background tasks on this device** turned on (on by default on desktop, off on mobile), once Obsidian Sync has been quiet for a minute. Highlights made on a phone or tablet reach the note when that device receives their sync file. Keep it on for one always-on device. **ePub Reader: Update book notes now** updates them straight away and says what changed. Every device must run version 1.1.38 or later.
 
 ## Markdown exports
 

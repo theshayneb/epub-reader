@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TFile } from "obsidian";
 import type { App, Vault } from "obsidian";
 import { AnnotationDocumentService } from "../src/annotation-documents";
-import { BookNoteUpdater, SETTLE_QUIET_MS, SyncSettleTracker, setProgressInFrontmatter } from "../src/book-notes";
+import { BookNoteUpdater, SETTLE_MAX_WAIT_MS, SETTLE_QUIET_MS, SyncSettleTracker, setProgressInFrontmatter } from "../src/book-notes";
 import { ReaderDataStore, memoryDeviceStorage } from "../src/store";
 import type { ReaderHighlight } from "../src/types";
 
@@ -97,6 +97,23 @@ describe("book notes on the background device", () => {
     updater.stop();
   });
 
+  it("keeps updating other books when one book's note fails, and reports both", async () => {
+    const { files, store, updater } = await setup("# Dune\n", true);
+    files.set("Books/Broken.epub", "");
+    const broken = store.ensureBook("Books/Broken.epub", { size: 1, mtime: 1 });
+    broken.position = { cfi: "epubcfi(/6/2!/4/2:0)", fraction: 0.1, updatedAt: 1, page: "3" };
+    broken.highlights.push(highlight("x"));
+    // A highlight whose rendering throws stands in for any failure while writing that book's note.
+    Object.defineProperty(broken.highlights[0]!, "text", { get: () => { throw new Error("boom"); } });
+    store.ensureBook(BOOK, { size: 1, mtime: 1 }).position = { cfi: "epubcfi(/6/2!/4/2:0)", fraction: 0.5, updatedAt: 1, page: "42" };
+    updater.start();
+    const report = await updater.updateNow();
+    expect(files.get(NOTE)).toContain("Progress: 42");
+    expect(report?.failed.map((item) => item.path)).toEqual(["Books/Broken.epub"]);
+    expect(report?.updated).toEqual([NOTE]);
+    updater.stop();
+  });
+
   it("never writes on a device without background tasks", async () => {
     vi.useFakeTimers();
     const { writes, store, updater } = await setup("# Dune\n", false);
@@ -109,17 +126,37 @@ describe("book notes on the background device", () => {
 });
 
 describe("waiting for Sync to settle", () => {
-  it("needs a quiet minute after the last vault change, and core Sync idle", () => {
+  it("needs a quiet minute after startup, and core Sync idle", () => {
     let now = 0;
     let busy = false;
     const tracker = new SyncSettleTracker(() => busy, () => now);
     now = SETTLE_QUIET_MS - 1;
     expect(tracker.remaining()).toBe(1);
     tracker.touch();
-    now += SETTLE_QUIET_MS;
-    expect(tracker.remaining()).toBe(0);
+    now += SETTLE_QUIET_MS - 1;
     busy = true;
     expect(tracker.remaining()).toBeGreaterThan(0);
+    now += 1;
+    expect(tracker.remaining()).toBeGreaterThan(0);
+    busy = false;
+    expect(tracker.remaining()).toBe(0);
+    // Once settled, later vault changes (other devices' files arriving) do not hold notes back.
+    tracker.touch();
+    expect(tracker.remaining()).toBe(0);
+    // Resuming the app waits again.
+    tracker.restart();
+    expect(tracker.remaining()).toBe(SETTLE_QUIET_MS);
+  });
+
+  it("stops waiting after five minutes even if the vault never goes quiet or Sync always looks busy", () => {
+    let now = 0;
+    const tracker = new SyncSettleTracker(() => true, () => now);
+    for (; now < SETTLE_MAX_WAIT_MS; now += 20_000) {
+      tracker.touch();
+      expect(tracker.remaining()).toBeGreaterThan(0);
+    }
+    tracker.touch();
+    expect(tracker.remaining()).toBe(0);
   });
 });
 
