@@ -2,6 +2,7 @@
 
 Status: Accepted
 Date: 2026-09-24
+Updated: 2026-11-18 (explicit edit times and tombstones, calm write schedule; see [device-storage.md](device-storage.md))
 
 ## Context
 
@@ -21,7 +22,7 @@ Sync reading data through per-device files in a vault folder (setting `syncFolde
 - Each device writes only `<syncFolder>/<deviceId>.json`. Because every file has exactly one writer, a file sync service never has to resolve conflicting edits, so "last modified wins" is always correct.
 - Each file holds that device's view of the merged state of all books, so data keeps propagating even after the device that created it goes offline.
 - Other devices' files are read at startup and whenever the vault reports them created or modified, then merged.
-- `data.json` stays the local source of truth for the reader and keeps device-specific settings; only reading data is synced.
+- Book state lives in this device's own storage (IndexedDB, see [device-storage.md](device-storage.md)), never in `data.json`; only the sync files carry it to other devices.
 
 Merge rules (`src/reading-sync-model.ts`) are commutative, associative, and idempotent, so all devices converge regardless of delivery order:
 
@@ -34,16 +35,18 @@ Merge rules (`src/reading-sync-model.ts`) are commutative, associative, and idem
 | Finished state | Last-writer-wins, so "mark as unfinished" syncs too. |
 | Annotation export document paths | A single-file location (`highlightPath` equals `notePath`) beats an old Highlight/Note pair; otherwise the earliest created wins. The file path itself is derived from the book title, so this only records where the file was last written. |
 
-Local edits are detected by diffing (`recordLocalBook`): the local `BookState` is compared with what the sync document last said about the book, and anything new, changed, or missing becomes a timestamped change. This keeps the many existing mutation sites in the reader untouched.
+Local edits carry their own times (`src/edit-records.ts`): highlights and bookmarks get `updatedAt` when edited, deletions leave local tombstones (`deletedHighlights`/`deletedBookmarks` with the deletion time), completion carries `completedUpdatedAt`, and this device's reading time is its own counter (`deviceReadingMs`). `recordLocalBook` merges these into the sync document with the same per-entry rules as any other device's file. It never stamps "now" and never reads a missing entry as a deletion.
+
+Before 1.1.38, `recordLocalBook` inferred edits by diffing the book state loaded from `data.json` against the device's sync file. Obsidian Sync replaced `data.json`'s `books` key with another device's copy, so foreign, stale state became fresh local edits: deleted highlights came back, highlights only one device had were deleted, older edits won, reading time was counted twice and completion flipped. `tests/reading-sync-model.test.ts` ("devices that sync late or hold stale copies") reproduces each case.
 
 Local-only fields are never synced: highlight/bookmark `stale` flags, bookshelf metadata (hidden, reading list, custom cover), and the EPUB source signature.
 
-### Ordering invariants (`src/reading-sync.ts`)
+### Write schedule and ordering (`src/reading-sync.ts`)
 
-1. **Record before merge.** Local edits are always recorded against this device's last synced state before other devices' data is merged. Recording after a merge would read newly received highlights as local deletions.
-2. **`data.json` before the sync file.** The store is flushed before the device's sync file is written, so the sync file never knows more than `data.json`. Otherwise a crash in between could make the next startup read the gap as local deletions.
-3. **First sync is conservative.** When a device has no sync file yet, nothing missing locally counts as a deletion and differing copies are merged by their own edit times, so a device with older copies cannot override newer data.
-4. **All work is serialized** through one promise queue; local changes are recorded after 3 seconds of quiet (at most 15 seconds), and immediately when the app is backgrounded or the plugin unloads.
+1. **Merge, then record.** At start, other devices' files are merged first, then local edits are recorded. With explicit edit times the order does not change the result; it only means data merely received from others does not count as a local change, so starting writes nothing.
+2. **Only local changes write.** The device's own file is rewritten only when recording local edits changed it. Merging another device's file never rewrites this device's file.
+3. **Calm writes.** A person's edits (highlights, bookmarks, completion) are written after 3 seconds of quiet, at most 15 seconds after the first. Reading progress (position, time) is written after 60 seconds without progress, at most every 2 minutes while reading, and at once when the book is closed or switched, the app is backgrounded, or the plugin unloads.
+4. **All work is serialized** through one promise queue.
 
 ### Open readers
 
@@ -59,13 +62,13 @@ Applied changes mutate the live `BookState` in place so open views keep valid re
 
 - With Obsidian Sync, users must enable "Sync all other types" so `.json` files are included. Obsidian's file explorer hides `.json` files by default, so only the folder is visible.
 - Works with any file-based sync (Obsidian Sync, iCloud, Syncthing) because it only relies on files being copied.
-- Tombstones are kept indefinitely; each is a few dozen bytes.
+- Tombstones are kept indefinitely; each is a few dozen bytes. A device on an old version may send old copies for days; they lose to newer edit times and tombstones.
 - Correctness depends on device clocks being roughly right; a device with a badly wrong clock can win or lose last-writer-wins comparisons incorrectly.
 - Renaming an EPUB carries its synced data to the new path on the renaming device; edits another device makes under the old path before it sees the rename stay under the old path.
-- Reading time from before sync was enabled is imported without double counting when devices already shared the same `data.json`, at the cost of undercounting when two devices had independent histories.
+- A device's reading counter starts from what its own sync file already credits it with, so time from before 1.1.38 is neither lost nor counted twice.
 
 ## Validation
 
 - `tests/reading-sync-model.test.ts`: two-device convergence for additions, deletions, edits, first sync, positions, reading time, completion, in-place mutation, merge order independence, and parsing.
-- `tests/reading-sync.test.ts`: the service against an in-memory shared vault, including a restart after another device added data (guards invariant 1).
+- `tests/reading-sync.test.ts`: the service against an in-memory shared vault, including a restart after another device added data, receiving without writing, and the progress write schedule.
 - Manual: with Obsidian Sync "Sync all other types" enabled, highlight on one device and confirm it appears on the other; turn pages on the phone, then open the desktop and confirm it resumes there.

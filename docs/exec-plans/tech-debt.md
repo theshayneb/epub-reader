@@ -4,6 +4,26 @@ Record intentional compromises that have a concrete maintenance, reliability, se
 
 ## Open items
 
+### TD-2026-006: Cover cache sits in the plugin folder
+
+- Status: Open
+- Area: `getCoverCacheDirectory` in `src/main.ts`
+- Introduced: before 2026-11-18; noted in [sync-churn.md](completed/sync-churn.md)
+- Impact: if Obsidian Sync copies arbitrary files in plugin folders, cached covers would churn between devices.
+- Reason accepted: whether Sync copies files other than `main.js`, `manifest.json`, `styles.css` and `data.json` could not be verified (help.obsidian.md unreachable from the build environment); covers are rewritten only when missing.
+- Exit criteria: confirm Sync's plugin-folder behaviour, or move the cache to IndexedDB.
+- Owner/trigger: next change to cover loading.
+
+### TD-2026-007: Core Sync "syncing" check uses undocumented internals
+
+- Status: Accepted
+- Area: `coreSyncBusy` in `src/book-notes.ts`
+- Introduced: 2026-11-18, [sync-churn.md](completed/sync-churn.md)
+- Impact: if Obsidian renames the internals, the background device relies only on the 60-second quiet-vault rule.
+- Reason accepted: there is no public API; the check is guarded and fails safe.
+- Exit criteria: Obsidian exposes Sync status publicly.
+- Owner/trigger: an Obsidian API update.
+
 ### TD-2026-005: Foliate srcdoc test fails intermittently under full-suite load
 
 - Status: Resolved (2026-10-05): the test now waits for the iframe content with `vi.waitFor` instead of a fixed 10 ms delay

@@ -2,6 +2,7 @@ import { FuzzySuggestModal, ItemView, Menu, Modal, Notice, TFile, WorkspaceLeaf,
 import { extractEpubCover } from "./epub-cover";
 import type { ReaderDataStore } from "./store";
 import type { ReaderSettings } from "./types";
+import { setCompletion } from "./edit-records";
 
 export const OMNI_BOOK_READER_BOOKSHELF_VIEW_TYPE = "omni-book-reader-mod-bookshelf-view";
 
@@ -616,7 +617,7 @@ export class OmniBookReaderBookshelfView extends ItemView {
   private setCompleted(file: TFile, completed: boolean): void {
     const state = this.stateFor(file);
     state.readingStats ??= { totalReadingMs: 0, lastOpenedAt: 0, lastReadAt: 0, furthestFraction: 0 };
-    state.readingStats.completedAt = completed ? Date.now() : undefined;
+    setCompletion(state.readingStats, completed ? Date.now() : undefined);
     if (completed) state.readingStats.furthestFraction = 1;
     this.plugin.store.markChanged(0);
     new Notice(completed ? "Marked as finished" : "Marked as unfinished");

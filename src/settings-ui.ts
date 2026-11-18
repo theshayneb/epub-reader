@@ -12,6 +12,14 @@ const SYNC_DESCRIPTION = "Keep reading progress, highlights, notes, bookmarks, a
 const HIDE_ANDROID_MENU_DESCRIPTION = "When you lift your finger after selecting text, dismiss Android's Copy, Share and Select all bar "
   + "so it does not cover the reader's toolbar. Android then also hides its selection handles: long-press again to change the selection.";
 const SYNC_FOLDER_DESCRIPTION = "Vault folder for the per-device sync files. Use the same folder on every device.";
+const BACKGROUND_TASKS_DESCRIPTION = "Updates book notes (highlights callout, Progress, Quotes) from every device's reading data. "
+  + "Turn on for one always-on device; this setting is not synced.";
+
+/** The per-device switch for background work. Stored in this device's local storage, never synced. */
+export interface BackgroundTasksHost {
+  readonly store: { readonly runBackgroundTasks: boolean };
+  setRunBackgroundTasks(value: boolean): void;
+}
 
 export interface SettingsHost {
   app: App;
@@ -212,7 +220,7 @@ export class ReaderSettingsModal extends Modal {
 }
 
 export class OmniBookReaderSettingTab extends PluginSettingTab {
-  constructor(app: App, private readonly host: SettingsHost & Plugin) {
+  constructor(app: App, private readonly host: SettingsHost & BackgroundTasksHost & Plugin) {
     super(app, host);
   }
 
@@ -409,6 +417,11 @@ export class OmniBookReaderSettingTab extends PluginSettingTab {
             desc: SYNC_FOLDER_DESCRIPTION,
             control: { type: "text", key: "syncFolder", placeholder: DEFAULT_SETTINGS.syncFolder },
           },
+          {
+            name: "Run background tasks on this device",
+            desc: BACKGROUND_TASKS_DESCRIPTION,
+            control: { type: "toggle", key: "runBackgroundTasks" },
+          },
         ],
       },
     ];
@@ -435,6 +448,7 @@ export class OmniBookReaderSettingTab extends PluginSettingTab {
       case "pageMargin": return settings.pageMargin;
       case "syncEnabled": return settings.syncEnabled;
       case "syncFolder": return settings.syncFolder;
+      case "runBackgroundTasks": return this.host.store.runBackgroundTasks;
       default: return undefined;
     }
   }
@@ -492,6 +506,9 @@ export class OmniBookReaderSettingTab extends PluginSettingTab {
         return;
       case "syncFolder":
         if (typeof value === "string") this.host.updateReaderSettings({ syncFolder: value });
+        return;
+      case "runBackgroundTasks":
+        if (typeof value === "boolean") this.host.setRunBackgroundTasks(value);
     }
   }
 
@@ -518,5 +535,11 @@ export class OmniBookReaderSettingTab extends PluginSettingTab {
         .setPlaceholder(DEFAULT_SETTINGS.syncFolder)
         .setValue(this.host.getReaderSettings().syncFolder)
         .onChange((syncFolder) => this.host.updateReaderSettings({ syncFolder })));
+    new Setting(this.containerEl)
+      .setName("Run background tasks on this device")
+      .setDesc(BACKGROUND_TASKS_DESCRIPTION)
+      .addToggle((toggle) => toggle
+        .setValue(this.host.store.runBackgroundTasks)
+        .onChange((value) => this.host.setRunBackgroundTasks(value)));
   }
 }

@@ -15,11 +15,12 @@ The plugin does not require a backend service. EPUB content, reading state, anno
 | Plugin shell | `src/main.ts` | Lifecycle, view registration, commands, protocol links, settings, and cross-view coordination |
 | Reader | `src/reader-view.ts`, `src/reader-ui-state.ts`, `src/mobile-input.ts` | Reading UI, navigation, selection, annotations, overlays, mobile input, and reading statistics |
 | Bookshelf | `src/bookshelf-view.ts`, `src/epub-cover.ts` | Vault EPUB discovery, cover extraction, filtering, sorting, and book management |
-| Reading sync | `src/reading-sync.ts`, `src/reading-sync-model.ts` | Per-device sync files, merge rules, and applying other devices' reading data |
+| Reading sync | `src/reading-sync.ts`, `src/reading-sync-model.ts`, `src/edit-records.ts` | Per-device sync files, edit times and tombstones, merge rules, and applying other devices' reading data |
+| Book notes | `src/book-notes.ts` | The background device's updates to book notes (callout, `Progress`, `Quotes`) after Obsidian Sync settles |
 | EPUB pipeline | `src/epub-loader.ts`, `src/epub-binary.ts`, `src/foliate-*.ts`, `src/blob-url-*.ts` | Load publications, normalize blob-backed resources, and adapt Foliate behavior for Obsidian desktop/mobile runtimes |
 | Safety boundary | `src/sanitizer.ts` | Remove executable or remote publication content before it enters the rendered document |
 | Layout and appearance | `src/reader-layout.ts`, `src/reader-style.ts`, `src/settings-ui.ts`, `styles.css` | Reader layout, publication CSS, user settings, and the plugin design system |
-| State | `src/store.ts`, `src/defaults.ts`, `src/types.ts`, `src/legacy-plugin-data.ts` | Schema, normalization, persistence, defaults, and migration from earlier plugin directories |
+| State | `src/store.ts`, `src/local-book-storage.ts`, `src/defaults.ts`, `src/types.ts`, `src/legacy-plugin-data.ts` | Schema, normalization, persistence, defaults, and migration from earlier plugin directories |
 | Exports | `src/annotation-documents.ts`, `src/chapter-export.ts`, `src/media-utils.ts` | Managed Markdown documents, chapter exports, images, filenames, and Vault writes |
 | Utilities | `src/search-session.ts`, `src/utils.ts` | Stale-search protection, identifiers, paths, and shared guards |
 
@@ -39,17 +40,17 @@ Keep modules focused. `main.ts` coordinates Obsidian integration; it should not 
 
 1. UI actions update the in-memory `ReaderDataStore` model.
 2. Store normalization protects the persisted schema from malformed, legacy, or out-of-range values.
-3. Debounced writes use Obsidian's plugin data storage.
-4. The store flushes pending changes at lifecycle boundaries where data loss would otherwise be possible.
+3. Book state is saved (debounced) to this device's IndexedDB; per-device settings to `app.saveLocalStorage`. Only shared settings go to `data.json`, read-merge-write, and only when one changes. See [`docs/design-docs/systems/device-storage.md`](docs/design-docs/systems/device-storage.md).
+4. The store flushes pending changes at lifecycle boundaries where data loss would otherwise be possible. `onExternalSettingsChange` merges shared settings another device synced.
 
 The schema is defined in `src/types.ts`. Any schema change must include normalization or migration behavior and tests for old or malformed data.
 
 ### Sync reading data across devices
 
 1. Each device writes only its own `<sync folder>/<device id>.json`, holding its view of the merged reading data.
-2. Local edits are detected by diffing the store against the last synced state and recorded before any other device's data is merged.
-3. Other devices' files are merged when they arrive, the result is applied to the store in place, and open readers and bookshelves refresh.
-4. `data.json` is flushed before the device's sync file is written.
+2. Local edits carry their own edit times and tombstones and are merged into the sync document with the same rules as other devices' data.
+3. Other devices' files are merged when they arrive, the result is applied to the store in place, and open readers and bookshelves refresh. Receiving never rewrites this device's file.
+4. Edits are written after a short pause; reading progress at most every two minutes, and at once on closing the book or backgrounding the app.
 
 See [`docs/design-docs/systems/reading-sync.md`](docs/design-docs/systems/reading-sync.md) for the merge rules and ordering invariants.
 

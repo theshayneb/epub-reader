@@ -5,6 +5,7 @@ import { ReadingSyncService } from "../src/reading-sync";
 import type { ReadingSyncHost } from "../src/reading-sync";
 import type { AppliedBookChange } from "../src/reading-sync-model";
 import { ReaderDataStore } from "../src/store";
+import { recordHighlightDeletion } from "../src/edit-records";
 import type { ReaderHighlight } from "../src/types";
 
 const BOOK = "Books/Test Book.epub";
@@ -174,12 +175,74 @@ describe("reading sync service", () => {
 
     const state = phone.store.getBook(BOOK)!;
     state.highlights = state.highlights.filter((item) => item.id !== "a");
+    recordHighlightDeletion(state, "a");
     phone.store.markChanged(0);
     await phone.sync.flush();
     desktop.receiveAll();
     await settle(desktop);
 
     expect(desktop.highlightIds()).toEqual(["b"]);
+  });
+
+  it("never rewrites its own file just because another device's file arrived", async () => {
+    const vault = new SharedVault();
+    const desktop = new SimulatedDevice(vault);
+    const phone = new SimulatedDevice(vault);
+    desktop.book().highlights.push(highlight("a"));
+    await desktop.sync.start();
+    await phone.sync.start();
+    const phoneFile = vault.syncFiles().find((path) => path !== vault.syncFiles()[0]);
+    const before = new Map(vault.files);
+
+    phone.book().highlights.push(highlight("b"));
+    phone.store.markChanged(0);
+    await phone.sync.flush();
+    const desktopFiles = vault.syncFiles().filter((path) => path !== phoneFile && vault.files.get(path) === before.get(path));
+    desktop.receiveAll();
+    await settle(desktop);
+
+    expect(desktop.highlightIds()).toEqual(["a", "b"]);
+    // The desktop's own file is unchanged: receiving is not an edit.
+    for (const path of desktopFiles) expect(vault.files.get(path)).toBe(before.get(path));
+    // Starting again with nothing new writes nothing either.
+    const snapshot = new Map(vault.files);
+    await desktop.sync.start();
+    expect(vault.files).toEqual(snapshot);
+  });
+
+  it("writes reading progress at most every two minutes while reading, and at once on flush", async () => {
+    vi.useFakeTimers();
+    const vault = new SharedVault();
+    const phone = new SimulatedDevice(vault);
+    phone.book();
+    await phone.sync.start();
+    const writes = (): string => vault.syncFiles().map((path) => vault.files.get(path)).join();
+    let last = writes();
+    let changes = 0;
+    for (let second = 0; second < 100; second += 15) {
+      const state = phone.store.getBook(BOOK)!;
+      state.position = { cfi: "epubcfi(/6/4!/4/2/1:0)", fraction: second / 1000, updatedAt: Date.now() };
+      phone.store.markChanged(250, "progress");
+      await vi.advanceTimersByTimeAsync(15_000);
+      if (writes() !== last) {
+        changes++;
+        last = writes();
+      }
+    }
+    expect(changes).toBe(0);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await phone.sync.flush();
+    expect(writes()).not.toBe(last);
+
+    // A paused reader writes once, after a minute.
+    last = writes();
+    phone.store.getBook(BOOK)!.position = { cfi: "epubcfi(/6/4!/4/2/1:0)", fraction: 0.5, updatedAt: Date.now() };
+    phone.store.markChanged(0, "progress");
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(writes()).toBe(last);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await phone.sync.flush();
+    expect(writes()).not.toBe(last);
   });
 
   it("does nothing when sync is turned off", async () => {

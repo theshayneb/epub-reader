@@ -1,4 +1,4 @@
-import { App, Menu, Modal, Notice, Plugin, TFile, normalizePath, setIcon, type Command } from "obsidian";
+import { App, Menu, Modal, Notice, Platform, Plugin, TFile, normalizePath, setIcon, type Command } from "obsidian";
 import { AnnotationDocumentService, PROTOCOL_ACTION, isBookLink, type AnnotationDocumentInput, type LayoutChoice } from "./annotation-documents";
 import { chooseColorOrder, chooseNoteLayout } from "./note-layout";
 import { OMNI_BOOK_READER_BOOKSHELF_VIEW_TYPE, OmniBookReaderBookshelfView } from "./bookshelf-view";
@@ -7,10 +7,12 @@ import { OMNI_BOOK_READER_VIEW_TYPE, OmniBookReaderView } from "./reader-view";
 import { ReadingSyncService } from "./reading-sync";
 import type { AppliedBookChange } from "./reading-sync-model";
 import { OmniBookReaderSettingTab } from "./settings-ui";
-import { ReaderDataStore } from "./store";
+import { BookNoteUpdater } from "./book-notes";
+import { IndexedDbBookStorage } from "./local-book-storage";
+import { ReaderDataStore, type DeviceStorage } from "./store";
 import { colorName, orderColors } from "./highlight-colors";
-import type { BookState, HighlightColor, ReaderHighlight, ReaderSettings } from "./types";
-import { isValidCfi, normalizeVaultPath, progressValue } from "./utils";
+import type { BookState, HighlightColor, ReaderSettings } from "./types";
+import { isValidCfi, normalizeVaultPath } from "./utils";
 
 function progressText(value: number): string {
   return `${Math.round(Math.min(1, Math.max(0, value)) * 100)}%`;
@@ -57,18 +59,25 @@ class RecentReadingModal extends Modal {
   }
 }
 
-/** Book note property that holds the page last read. */
-const PROGRESS_PROPERTY = "Progress";
-
 export default class OmniBookReaderPlugin extends Plugin {
   store!: ReaderDataStore;
-  private annotationDocuments!: AnnotationDocumentService;
+  annotationDocuments!: AnnotationDocumentService;
+  device!: DeviceStorage;
   private readingSync!: ReadingSyncService;
+  private bookNotes!: BookNoteUpdater;
   private syncRestartTimer: number | null = null;
 
   async onload(): Promise<void> {
+    const device: DeviceStorage = this.device = {
+      load: (key) => this.app.loadLocalStorage(key) as unknown,
+      save: (key, value) => this.app.saveLocalStorage(key, value),
+    };
     this.store = new ReaderDataStore(this, (error) => {
       console.error("[Omni Book Reader] Failed to persist data", error);
+    }, {
+      books: new IndexedDbBookStorage(device),
+      device,
+      defaultBackgroundTasks: Platform.isDesktopApp,
     });
     await this.store.load();
     try {
@@ -93,13 +102,7 @@ export default class OmniBookReaderPlugin extends Plugin {
       (sourceFile) => this.findBookNote(sourceFile),
       (input) => this.chooseBookNoteLayout(input),
     );
-    try {
-      await this.annotationDocuments.migrateLegacyProtocolLinks(
-        Object.values(this.store.snapshot.books).map((state) => state.annotationDocuments),
-      );
-    } catch (error) {
-      console.error("[Omni Book Reader] Could not migrate legacy CFI links", error);
-    }
+    this.bookNotes = new BookNoteUpdater(this);
 
     this.registerView(OMNI_BOOK_READER_VIEW_TYPE, (leaf) => new OmniBookReaderView(leaf, this));
     this.registerView(OMNI_BOOK_READER_BOOKSHELF_VIEW_TYPE, (leaf) => new OmniBookReaderBookshelfView(leaf, this));
@@ -244,15 +247,29 @@ export default class OmniBookReaderPlugin extends Plugin {
     }));
 
     this.readingSync = new ReadingSyncService(this);
-    this.registerEvent(this.app.vault.on("create", (file) => this.readingSync.handleVaultChange(file)));
-    this.registerEvent(this.app.vault.on("modify", (file) => this.readingSync.handleVaultChange(file)));
-    // Mobile apps can be suspended or killed after backgrounding, so write pending progress right away.
+    this.registerEvent(this.app.vault.on("create", (file) => {
+      this.bookNotes.vaultChanged(file);
+      this.readingSync.handleVaultChange(file);
+    }));
+    this.registerEvent(this.app.vault.on("modify", (file) => {
+      this.bookNotes.vaultChanged(file);
+      this.readingSync.handleVaultChange(file);
+    }));
+    this.registerEvent(this.app.vault.on("delete", (file) => this.bookNotes.vaultChanged(file)));
+    this.registerEvent(this.app.vault.on("rename", (file) => this.bookNotes.vaultChanged(file)));
     this.registerDomEvent(document, "visibilitychange", () => {
-      if (document.visibilityState !== "hidden") return;
+      if (document.visibilityState !== "hidden") {
+        this.bookNotes.resumed();
+        return;
+      }
+      // Mobile apps can be suspended or killed after backgrounding, so write pending progress right away.
       void this.store.flush();
       void this.readingSync.flush();
     });
-    this.app.workspace.onLayoutReady(() => void this.readingSync.start());
+    this.app.workspace.onLayoutReady(() => {
+      void this.readingSync.start();
+      if (this.store.runBackgroundTasks) this.bookNotes.start();
+    });
     this.addUiCommand({
       id: "sync-reading-data",
       callback: () => void this.syncReadingDataNow(),
@@ -283,9 +300,24 @@ export default class OmniBookReaderPlugin extends Plugin {
 
   onunload(): void {
     if (this.syncRestartTimer !== null) window.clearTimeout(this.syncRestartTimer);
+    this.bookNotes?.stop();
     void this.readingSync?.flush().finally(() => this.readingSync.stop());
     void this.store?.flush();
     void this.annotationDocuments?.flush();
+  }
+
+  /** Another device's `data.json` arrived through Sync: merge its shared settings and apply them. */
+  async onExternalSettingsChange(): Promise<void> {
+    const before = this.store.settings;
+    if (!await this.store.reloadSharedSettings()) return;
+    const after = this.store.settings;
+    if (before.syncEnabled !== after.syncEnabled || before.syncFolder !== after.syncFolder) this.scheduleSyncRestart();
+    this.applySettingsToViews();
+  }
+
+  /** Writes this device's pending reading data to its sync file now (book closed or left). */
+  flushReadingSync(): Promise<void> {
+    return this.readingSync?.flush() ?? Promise.resolve();
   }
 
   getReaderSettings(): ReaderSettings {
@@ -306,6 +338,10 @@ export default class OmniBookReaderPlugin extends Plugin {
     if (bookshelfChanged) {
       this.refreshBookshelves();
     }
+    this.applySettingsToViews();
+  }
+
+  private applySettingsToViews(): void {
     for (const leaf of this.app.workspace.getLeavesOfType(OMNI_BOOK_READER_VIEW_TYPE)) {
       if (leaf.view instanceof OmniBookReaderView) {
         leaf.view.applySettings();
@@ -315,6 +351,7 @@ export default class OmniBookReaderPlugin extends Plugin {
 
   /** Asks which layout a book's note uses (and its heading order), the first time it is written. */
   private async chooseBookNoteLayout(input: AnnotationDocumentInput): Promise<LayoutChoice | null> {
+    if (input.interactive === false) return null;
     const layout = await chooseNoteLayout(this.app, input.title || input.sourceFile.basename);
     if (!layout) return null;
     if (layout !== "by-color") return { layout };
@@ -344,34 +381,37 @@ export default class OmniBookReaderPlugin extends Plugin {
     return order ? order.map((color) => color.toLowerCase()) : null;
   }
 
-  syncAnnotationDocuments(input: AnnotationDocumentInput): Promise<void> {
-    return this.annotationDocuments.sync(input);
-  }
-
-  /** Adds a highlight saved with "Highlight and add tags" to the book note's `Quotes` property. */
-  addQuoteToBookNote(sourceFile: TFile, highlight: ReaderHighlight): Promise<void> {
-    return this.annotationDocuments.addQuote(sourceFile, highlight, (note, update) => this.app.fileManager.processFrontMatter(note, update));
-  }
-
   /**
-   * Stores the page being read in the book note's `Progress` property (a number when the page is one).
-   * Books without a note are skipped quietly; the property is only written when it changes.
+   * Updates a book's note right after a local edit, on the device that runs background tasks. Other
+   * devices never write book notes: their edits arrive through reading sync. False when skipped.
    */
-  async recordReadingProgress(sourceFile: TFile, page: string): Promise<void> {
-    const note = this.findBookNote(sourceFile);
-    if (!note) return;
-    const value = progressValue(page);
-    const current: unknown = this.app.metadataCache.getFileCache(note)?.frontmatter?.[PROGRESS_PROPERTY];
-    if (current === value) return;
-    // Let any pending highlight write to the same note finish first.
-    await this.annotationDocuments.flush();
-    await this.app.fileManager.processFrontMatter(note, (frontmatter: Record<string, unknown>) => {
-      frontmatter[PROGRESS_PROPERTY] = value;
-    });
+  async syncAnnotationDocuments(input: AnnotationDocumentInput): Promise<boolean> {
+    if (!this.store.runBackgroundTasks) return false;
+    await this.annotationDocuments.sync(input);
+    await this.bookNotes.updateNow();
+    return true;
+  }
+
+  /** Turns background tasks (book note updates) on or off for this device only. */
+  setRunBackgroundTasks(value: boolean): void {
+    this.store.setRunBackgroundTasks(value);
+    if (value) this.bookNotes.start();
+    else this.bookNotes.stop();
+  }
+
+  /** Rewrites links from earlier versions in book notes. Background device only, after Sync settles. */
+  async migrateLegacyLinks(): Promise<void> {
+    try {
+      await this.annotationDocuments.migrateLegacyProtocolLinks(
+        this.store.liveBooks().map(([, state]) => state.annotationDocuments),
+      );
+    } catch (error) {
+      console.error("[Omni Book Reader] Could not migrate legacy CFI links", error);
+    }
   }
 
   /** The Markdown note named like the EPUB, which holds the book's highlights. */
-  private findBookNote(sourceFile: TFile): TFile | null {
+  findBookNote(sourceFile: TFile): TFile | null {
     const linked = this.app.metadataCache.getFirstLinkpathDest(sourceFile.basename, sourceFile.path);
     if (linked && linked.extension.toLowerCase() === "md" && linked.basename === sourceFile.basename) return linked;
     return this.app.vault.getMarkdownFiles().find((file) => file.basename === sourceFile.basename) ?? null;
@@ -403,6 +443,7 @@ export default class OmniBookReaderPlugin extends Plugin {
       const change = byPath.get(view.file.path);
       if (change) view.applySyncedChanges(change);
     }
+    this.bookNotes.booksChanged();
     this.refreshBookshelves();
   }
 

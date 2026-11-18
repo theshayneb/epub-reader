@@ -40,19 +40,23 @@ function bookState(overrides: Partial<BookState> = {}): BookState {
 /** One simulated device: local book state plus its own sync document, synced the way the service does it. */
 class Device {
   doc: SyncDocument;
-  firstImport = true;
 
   constructor(readonly id: string, readonly state: BookState = bookState()) {
     this.doc = createSyncDocument(id);
   }
 
   /** Records local edits, then merges other devices' files, then applies the result locally. */
-  sync(now: number, ...others: Device[]): void {
-    recordLocalBook(this.doc, BOOK, this.state, this.id, now, this.firstImport);
-    this.firstImport = false;
+  sync(_now: number, ...others: Device[]): void {
+    recordLocalBook(this.doc, BOOK, this.state, this.id);
     for (const other of others) mergeSyncDocumentInto(this.doc, structuredClone(other.doc));
     const book = this.doc.books[BOOK];
-    if (book) applySyncedBook(BOOK, this.state, book);
+    if (book) applySyncedBook(BOOK, this.state, book, this.id);
+  }
+
+  /** Deletes a highlight the way the reader does: removes it and keeps a dated tombstone. */
+  deleteHighlight(id: string, at: number): void {
+    this.state.highlights = this.state.highlights.filter((item) => item.id !== id);
+    this.state.deletedHighlights = { ...this.state.deletedHighlights, [id]: at };
   }
 
   highlightIds(): string[] {
@@ -80,7 +84,7 @@ describe("reading sync model", () => {
     phone.sync(2000, desktop);
     expect(phone.highlightIds()).toEqual(["a", "b"]);
 
-    phone.state.highlights = phone.state.highlights.filter((item) => item.id !== "a");
+    phone.deleteHighlight("a", 3000);
     phone.sync(3000, desktop);
     desktop.sync(4000, phone);
     phone.sync(5000, desktop);
@@ -95,10 +99,9 @@ describe("reading sync model", () => {
     desktop.sync(2000);
     phone.sync(2000, desktop);
 
-    desktop.state.highlights[0]!.note = "Older note";
+    Object.assign(desktop.state.highlights[0]!, { note: "Older note", updatedAt: 3000 });
     desktop.sync(3000, phone);
-    phone.state.highlights[0]!.note = "Newer note";
-    phone.state.highlights[0]!.color = "#6f9fe8";
+    Object.assign(phone.state.highlights[0]!, { note: "Newer note", color: "#6f9fe8", updatedAt: 4000 });
     phone.sync(4000, desktop);
     desktop.sync(5000, phone);
 
@@ -127,11 +130,11 @@ describe("reading sync model", () => {
   it("uses the most recent reading position and sums reading time across devices", () => {
     const desktop = new Device("desktop", bookState({
       position: { cfi: "epubcfi(/6/10!/4/2/1:0)", fraction: 0.2, updatedAt: 1000 },
-      readingStats: { totalReadingMs: 60000, lastOpenedAt: 1000, lastReadAt: 1000, furthestFraction: 0.2 },
+      readingStats: { totalReadingMs: 60000, deviceReadingMs: 60000, lastOpenedAt: 1000, lastReadAt: 1000, furthestFraction: 0.2 },
     }));
     const phone = new Device("phone", bookState({
       position: { cfi: "epubcfi(/6/20!/4/2/1:0)", fraction: 0.4, updatedAt: 2000 },
-      readingStats: { totalReadingMs: 30000, lastOpenedAt: 2000, lastReadAt: 2000, furthestFraction: 0.4 },
+      readingStats: { totalReadingMs: 30000, deviceReadingMs: 30000, lastOpenedAt: 2000, lastReadAt: 2000, furthestFraction: 0.4 },
     }));
 
     desktop.sync(3000);
@@ -144,6 +147,7 @@ describe("reading sync model", () => {
 
     // Further reading on one device adds only that device's new time.
     desktop.state.readingStats!.totalReadingMs += 10000;
+    desktop.state.readingStats!.deviceReadingMs! += 10000;
     desktop.sync(5000, phone);
     phone.sync(6000, desktop);
     expect(phone.state.readingStats?.totalReadingMs).toBe(100000);
@@ -159,6 +163,7 @@ describe("reading sync model", () => {
     expect(phone.state.readingStats?.completedAt).toBe(1000);
 
     delete phone.state.readingStats!.completedAt;
+    phone.state.readingStats!.completedUpdatedAt = 3000;
     phone.sync(3000, desktop);
     desktop.sync(4000, phone);
     expect(desktop.state.readingStats?.completedAt).toBeUndefined();
@@ -218,7 +223,7 @@ describe("reading sync model", () => {
     tablet.sync(2000);
     phone.sync(2000, tablet);
 
-    tablet.state.highlights[0]!.color = "#6f9fe8";
+    Object.assign(tablet.state.highlights[0]!, { color: "#6f9fe8", updatedAt: 3000 });
     tablet.sync(3000, phone);
     // A desktop on a version before 1.1.29 reads the blue value as "yellow" and writes its file back
     // with the tablet's edit time.
@@ -280,5 +285,98 @@ describe("reading sync model", () => {
     const parsed = parseSyncDocument(canonicalJson(device.doc));
     const highlights = Object.values(Object.values(parsed?.books ?? {})[0]?.highlights ?? {});
     expect(highlights[0] && "value" in highlights[0] ? highlights[0].value.page : undefined).toBe("12");
+  });
+
+  describe("devices that sync late or hold stale copies", () => {
+    it("never brings back a highlight deleted elsewhere when a stale copy of it shows up locally", () => {
+      const desktop = new Device("desktop", bookState({ highlights: [highlight("a"), highlight("b")] }));
+      const phone = new Device("phone");
+      desktop.sync(2000);
+      phone.sync(2000, desktop);
+
+      desktop.deleteHighlight("a", 3000);
+      desktop.sync(3000, phone);
+      phone.sync(3500, desktop);
+      expect(phone.highlightIds()).toEqual(["b"]);
+      // Then Obsidian Sync drops an old copy of the books (still holding "a") into the phone's local data.
+      phone.state.highlights = [highlight("a"), highlight("b")];
+      phone.sync(4000, desktop);
+      desktop.sync(5000, phone);
+
+      expect(phone.highlightIds()).toEqual(["b"]);
+      expect(desktop.highlightIds()).toEqual(["b"]);
+    });
+
+    it("never deletes a highlight just because a stale copy of the books lacks it", () => {
+      const desktop = new Device("desktop", bookState({ highlights: [highlight("a")] }));
+      const phone = new Device("phone");
+      desktop.sync(2000);
+      phone.sync(2000, desktop);
+
+      phone.state.highlights.push(highlight("p", { createdAt: 2500, updatedAt: 2500 }));
+      phone.sync(2500, desktop);
+      // The phone's local books are replaced by the desktop's older copy, which never had "p".
+      phone.state.highlights = [highlight("a")];
+      phone.sync(3000, desktop);
+      desktop.sync(4000, phone);
+
+      expect(phone.highlightIds()).toEqual(["a", "p"]);
+      expect(desktop.highlightIds()).toEqual(["a", "p"]);
+    });
+
+    it("merges a tablet's one real edit from days ago without its stale copies overriding newer edits", () => {
+      const desktop = new Device("desktop", bookState({ highlights: [highlight("a"), highlight("b"), highlight("c")] }));
+      const tablet = new Device("tablet");
+      desktop.sync(1000);
+      tablet.sync(1000, desktop);
+
+      // The tablet goes offline. Days of edits happen on the desktop meanwhile.
+      Object.assign(tablet.state.highlights.find((item) => item.id === "b")!, { note: "Tablet note", updatedAt: 5000 });
+      Object.assign(desktop.state.highlights.find((item) => item.id === "a")!, { note: "Desktop note", updatedAt: 8000 });
+      desktop.deleteHighlight("c", 9000);
+      desktop.sync(9000);
+
+      // The tablet comes back with its stale copies of "a" and "c" plus its real edit to "b".
+      tablet.sync(200000, desktop);
+      desktop.sync(200001, tablet);
+
+      for (const device of [desktop, tablet]) {
+        expect(device.highlightIds()).toEqual(["a", "b"]);
+        expect(device.state.highlights.find((item) => item.id === "a")?.note).toBe("Desktop note");
+        expect(device.state.highlights.find((item) => item.id === "b")?.note).toBe("Tablet note");
+      }
+    });
+
+    it("keeps a deletion even when the deleting device's tombstone reaches a tablet days later", () => {
+      const phone = new Device("phone", bookState({ highlights: [highlight("x")] }));
+      const tablet = new Device("tablet");
+      phone.sync(1000);
+      tablet.sync(1000, phone);
+      phone.deleteHighlight("x", 2000);
+      phone.sync(2000);
+      // Days pass; the tablet re-records its untouched copy many times before it sees the tombstone.
+      tablet.sync(50000);
+      tablet.sync(90000);
+      tablet.sync(100000, phone);
+      phone.sync(100001, tablet);
+      expect(tablet.highlightIds()).toEqual([]);
+      expect(phone.highlightIds()).toEqual([]);
+    });
+
+    it("never double-counts reading time from a stale total", () => {
+      const desktop = new Device("desktop", bookState({
+        readingStats: { totalReadingMs: 60000, deviceReadingMs: 60000, lastOpenedAt: 1, lastReadAt: 1, furthestFraction: 0.1 },
+      }));
+      const phone = new Device("phone", bookState({
+        readingStats: { totalReadingMs: 10000, deviceReadingMs: 10000, lastOpenedAt: 1, lastReadAt: 1, furthestFraction: 0.1 },
+      }));
+      desktop.sync(1);
+      phone.sync(2, desktop);
+      // A stale merged total lands in the phone's local stats; its own counter is unchanged.
+      phone.state.readingStats!.totalReadingMs = 140000;
+      phone.sync(3, desktop);
+      desktop.sync(4, phone);
+      expect(desktop.state.readingStats?.totalReadingMs).toBe(70000);
+    });
   });
 });

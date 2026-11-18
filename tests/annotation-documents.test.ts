@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AnnotationDocumentService,
   HIGHLIGHTS_CALLOUT,
-  addQuoteToFrontmatter,
+  mergeQuotes,
+  readQuotesFromFrontmatter,
+  setQuotesInFrontmatter,
   quoteEntry,
   annotationFileName,
   buildCfiLink,
@@ -254,41 +256,26 @@ describe("book note highlights", () => {
     expect(quoteEntry(highlight({ text: "He said “hi”", tags: ["quote"] }))).toBe("He said ‘hi’ #quote");
   });
 
-  it("adds Quotes entries as double-quoted YAML strings", () => {
-    const entry = "A passage #quote #big_idea";
-    expect(addQuoteToFrontmatter("# Book\n", entry)).toBe('---\nQuotes:\n  - "A passage #quote #big_idea"\n---\n# Book\n');
-
-    const withProps = "---\nstatus: reading\n---\n# Book\n";
-    expect(addQuoteToFrontmatter(withProps, entry)).toBe('---\nstatus: reading\nQuotes:\n  - "A passage #quote #big_idea"\n---\n# Book\n');
-
-    const withList = '---\nQuotes:\n    - "First #quote"\nProgress: 12\n---\nBody';
-    const added = addQuoteToFrontmatter(withList, entry);
-    expect(added).toBe('---\nQuotes:\n    - "First #quote"\n    - "A passage #quote #big_idea"\nProgress: 12\n---\nBody');
-    expect(addQuoteToFrontmatter(added ?? "", entry)).toBe(added);
-
-    const emptyList = "---\nQuotes:\ntags: [x]\n---\n";
-    expect(addQuoteToFrontmatter(emptyList, entry)).toBe('---\nQuotes:\n  - "A passage #quote #big_idea"\ntags: [x]\n---\n');
-
-    expect(addQuoteToFrontmatter("---\nQuotes: [a, b]\n---\n", entry)).toBeNull();
-    expect(addQuoteToFrontmatter("---\nQuotes: one\n---\n", entry)).toBeNull();
-    expect(addQuoteToFrontmatter("x", 'back\\slash #quote')).toBe('---\nQuotes:\n  - "back\\\\slash #quote"\n---\nx');
+  it("keeps Quotes in step with the highlights, removing only entries it generated", () => {
+    expect(mergeQuotes(["hand", "a #quote"], ["a #quote", "b #quote"], [])).toEqual(["hand", "a #quote", "b #quote"]);
+    // "a" was deleted on another device: its entry goes, the hand-written one stays.
+    expect(mergeQuotes(["hand", "a #quote", "b #quote"], ["b #quote"], ["a #quote", "b #quote"])).toEqual(["hand", "b #quote"]);
+    // An edited highlight replaces its old entry.
+    expect(mergeQuotes(["b #quote"], ["b2 #quote"], ["b #quote"])).toEqual(["b2 #quote"]);
   });
 
-  it("writes Quotes into the book note, falling back to Obsidian's frontmatter API", async () => {
-    const { entries, service } = setup("---\nstatus: reading\n---\n# Test Book\n");
-    const item = highlight({ tags: ["funny"] });
-    const processFrontMatter = vi.fn();
-    await service.addQuote(sourceFile, item, processFrontMatter);
-    expect(entries.get(notePath)?.content).toBe('---\nstatus: reading\nQuotes:\n  - "The highlighted source text #quote #funny"\n---\n# Test Book\n');
-    expect(processFrontMatter).not.toHaveBeenCalled();
-
-    const inline = setup("---\nQuotes: [old]\n---\n");
-    const update = vi.fn(async (_note: TFile, apply: (frontmatter: Record<string, unknown>) => void) => {
-      const frontmatter: Record<string, unknown> = { Quotes: ["old"] };
-      apply(frontmatter);
-      expect(frontmatter.Quotes).toEqual(["old", "The highlighted source text #quote #funny"]);
-    });
-    await inline.service.addQuote(sourceFile, item, update);
-    expect(update).toHaveBeenCalledOnce();
+  it("reads and writes the Quotes list as double-quoted YAML strings", () => {
+    const note = '---\nstatus: reading\nQuotes:\n  - "A #quote"\n  - hand written\n---\n# Book\n';
+    expect(readQuotesFromFrontmatter(note)).toEqual(["A #quote", "hand written"]);
+    expect(setQuotesInFrontmatter(note, ["A #quote", "hand written"])).toBe(note);
+    expect(setQuotesInFrontmatter(note, ["hand written", "B #quote #big_idea"]))
+      .toBe('---\nstatus: reading\nQuotes:\n  - "hand written"\n  - "B #quote #big_idea"\n---\n# Book\n');
+    expect(setQuotesInFrontmatter(note, [])).toBe("---\nstatus: reading\n---\n# Book\n");
+    expect(setQuotesInFrontmatter("# Book\n", ["A #quote"])).toBe('---\nQuotes:\n  - "A #quote"\n---\n# Book\n');
+    expect(setQuotesInFrontmatter("# Book\n", [])).toBe("# Book\n");
+    expect(setQuotesInFrontmatter("---\nQuotes: [a, b]\n---\n", ["A"])).toBeNull();
+    expect(setQuotesInFrontmatter("x", ["back\\slash #quote"])).toBe('---\nQuotes:\n  - "back\\\\slash #quote"\n---\nx');
+    expect(quoteEntry(highlight({ text: 'He said "go"', tags: ["big idea"] }))).toBe("He said 'go' #quote #big_idea");
   });
+
 });

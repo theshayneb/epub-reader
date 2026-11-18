@@ -18,6 +18,7 @@ Design documents explain how and why a change is implemented. Product behavior b
 - [`systems/note-layouts.md`](systems/note-layouts.md): the two note layouts shared with PDF Annotator, the shared `note-layout.ts` module, and switching between layouts.
 - [`systems/annotation-documents.md`](systems/annotation-documents.md): one highlights-and-notes file per book, its format, and moving the older two-file layout.
 - [`systems/reading-sync.md`](systems/reading-sync.md): per-device sync files, merge rules, and ordering invariants for syncing reading data across devices.
+- [`systems/device-storage.md`](systems/device-storage.md): what is stored per device versus in `data.json`, shared-settings merging, and the background device that alone writes book notes.
 - [`../obsidian-review-versions-json.md`](../obsidian-review-versions-json.md): investigation notes for the Obsidian review requirement around `versions.json`.
 
 ## When a design document is required

@@ -29,6 +29,7 @@ import {
   installFoliateBlobIframePatch,
 } from "./foliate-runtime-patches";
 import { clearInlinedResourceCache } from "./foliate-blob-markup-normalizer";
+import { addDeviceReadingTime, markHighlightEdited, recordBookmarkDeletion, recordHighlightDeletion, setCompletion } from "./edit-records";
 import { installFoliateCustomElementGuard } from "./foliate-custom-element-guard";
 import { extensionForBlob, safeFileName, saveBlobToVault, sourceToBlob } from "./media-utils";
 import { applyReflowableLayout, resolveViewportWidth } from "./reader-layout";
@@ -154,26 +155,28 @@ function isDomRange(value: unknown): value is Range {
 export interface ReaderPluginHost extends SettingsHost {
   store: ReaderDataStore;
   updateReaderSettings(patch: Partial<ReaderSettings>): void;
-  syncAnnotationDocuments(input: AnnotationDocumentInput): Promise<void>;
+  /** Updates the book note after a local edit; false (and nothing written) unless this device runs background tasks. */
+  syncAnnotationDocuments(input: AnnotationDocumentInput): Promise<boolean>;
   chooseHeadingOrder(state: BookState, confirmText: string): Promise<HighlightColor[] | null | undefined>;
-  recordReadingProgress(sourceFile: TFile, page: string): Promise<void>;
-  addQuoteToBookNote(sourceFile: TFile, highlight: ReaderHighlight): Promise<void>;
+  /** Writes this device's pending reading data to its sync file now. */
+  flushReadingSync(): Promise<void>;
+  findBookNote(sourceFile: TFile): TFile | null;
 }
 
 /**
- * Saving the position writes the whole plugin data file, so wait until page turning pauses rather than
+ * Saving the position writes this device's book storage, so wait until page turning pauses rather than
  * doing it while the next chapter loads. Closing the book still saves immediately.
  */
 const POSITION_SAVE_DELAY_MS = 2000;
+
+/** Shown where a book note would be written on a device that leaves book notes to another device. */
+const NOTES_ON_OTHER_DEVICE = "Book notes are updated by your device with background tasks on.";
 
 /** Wait for Android to finish adjusting a touch selection before dismissing its text menu. */
 const NATIVE_MENU_DISMISS_DELAY_MS = 350;
 
 /** How long a just-cleared selection can still be looked up (Android may clear it as the toolbar is tapped). */
 const RECENT_SELECTION_MS = 10000;
-
-/** How often the page being read is saved to the book note's `Progress` property while a book is open. */
-const PROGRESS_SAVE_INTERVAL_MS = 3 * 60 * 1000;
 
 function iconButton(parent: HTMLElement, icon: string, label: string): HTMLButtonElement {
   const button = parent.createEl("button", {
@@ -543,7 +546,6 @@ export class OmniBookReaderView extends FileView {
   /** Position received from another device; the next save keeps its timestamp so devices do not echo it back as newer. */
   private syncedPosition: { position: ReadingPosition; until: number } | null = null;
   private statsTimer: number | null = null;
-  private progressSaveTimer: number | null = null;
   private lookupInFlight = false;
   private lookupPanel: LookupPanel | null = null;
   private lastSelection: { pending: PendingSelection; at: number } | null = null;
@@ -624,9 +626,9 @@ export class OmniBookReaderView extends FileView {
     void this.loadBook(file);
   }
 
-  async onUnloadFile(file: TFile): Promise<void> {
-    this.recordReadingProgress(file);
+  async onUnloadFile(_file: TFile): Promise<void> {
     await this.cleanupReader();
+    void this.plugin.flushReadingSync();
   }
 
   async onClose(): Promise<void> {
@@ -636,9 +638,9 @@ export class OmniBookReaderView extends FileView {
     this.layoutObserver = null;
     if (this.layoutFrame !== null) window.cancelAnimationFrame(this.layoutFrame);
     this.layoutFrame = null;
-    if (this.file) this.recordReadingProgress(this.file);
     await this.cleanupReader();
     await this.plugin.store.flush();
+    void this.plugin.flushReadingSync();
     this.contentEl.empty();
     this.rootEl = null;
   }
@@ -682,15 +684,18 @@ export class OmniBookReaderView extends FileView {
     }
     const index = this.bookState.bookmarks.findIndex((item) => item.cfi === this.currentLocation.cfi);
     if (index >= 0) {
-      this.bookState.bookmarks.splice(index, 1);
+      const [removed] = this.bookState.bookmarks.splice(index, 1);
+      if (removed) recordBookmarkDeletion(this.bookState, removed.id);
       new Notice("Bookmark removed");
     } else {
+      const now = Date.now();
       this.bookState.bookmarks.unshift({
         id: createId("bookmark"),
         cfi: this.currentLocation.cfi,
         fraction: this.currentLocation.fraction ?? 0,
         chapter: this.currentChapter(),
-        createdAt: Date.now(),
+        createdAt: now,
+        updatedAt: now,
       });
       new Notice("Bookmark added");
     }
@@ -717,6 +722,7 @@ export class OmniBookReaderView extends FileView {
     state.noteSettingsUpdatedAt = Date.now();
     this.plugin.store.markChanged(0);
     if (await this.syncAnnotationDocuments()) new Notice("Note layout changed");
+    else if (!this.plugin.store.runBackgroundTasks) new Notice(`Note layout saved. ${NOTES_ON_OTHER_DEVICE}`);
   }
 
   async exportAnnotations(): Promise<void> {
@@ -735,6 +741,13 @@ export class OmniBookReaderView extends FileView {
         this.bookState.colorOrder = order;
         this.bookState.noteSettingsUpdatedAt = Date.now();
       }
+    }
+    if (!this.plugin.store.runBackgroundTasks) {
+      // This device leaves book notes to the background device: open the note as it is.
+      const note = this.plugin.findBookNote(this.file);
+      if (note) this.openAnnotationDocument(note.path);
+      new Notice(NOTES_ON_OTHER_DEVICE);
+      return;
     }
     if (!await this.syncAnnotationDocuments()) return;
     const path = this.bookState.annotationDocuments?.highlightPath;
@@ -1296,10 +1309,6 @@ export class OmniBookReaderView extends FileView {
       this.renderSelectionColors();
       this.renderHighlights();
       this.applySettings();
-      if (this.bookState.highlights.length || this.bookState.annotationDocuments) {
-        await this.syncAnnotationDocuments();
-        this.renderHighlights();
-      }
 
       this.showLoading(
         "Restoring reading position…",
@@ -1373,7 +1382,7 @@ export class OmniBookReaderView extends FileView {
         void reader.addAnnotation(annotationFor(highlight)).catch((error) => {
           console.warn("[Omni Book Reader] Stored highlight could not be restored", error);
           highlight.stale = true;
-          this.plugin.store.markChanged(0);
+          this.plugin.store.markChanged(0, "progress");
           this.renderHighlights();
         });
       }
@@ -2078,6 +2087,8 @@ export class OmniBookReaderView extends FileView {
     if (pending.connected.length) {
       const connected = new Set(pending.connected);
       this.bookState.highlights = this.bookState.highlights.filter((item) => !connected.has(item));
+      // The first connected highlight lives on as the merged one; the others are deleted.
+      for (const merged of pending.connected.slice(1)) recordHighlightDeletion(this.bookState, merged.id);
     }
     let saved: ReaderHighlight;
     if (existing) {
@@ -2098,6 +2109,7 @@ export class OmniBookReaderView extends FileView {
         delete existing.note;
         delete existing.noteUpdatedAt;
       }
+      markHighlightEdited(existing);
       this.bookState.highlights.unshift(existing);
       await this.reader.addAnnotation(annotationFor(existing));
       saved = existing;
@@ -2113,6 +2125,7 @@ export class OmniBookReaderView extends FileView {
         sectionIndex: pending.sectionIndex,
         createdAt: Date.now(),
       };
+      markHighlightEdited(highlight, highlight.createdAt);
       const page = this.currentPageLabel();
       if (page) highlight.page = page;
       this.bookState.highlights.unshift(highlight);
@@ -2213,6 +2226,7 @@ export class OmniBookReaderView extends FileView {
     const index = this.bookState.highlights.findIndex((item) => item.id === highlight.id);
     if (index < 0) return;
     this.bookState.highlights.splice(index, 1);
+    recordHighlightDeletion(this.bookState, highlight.id);
     await this.reader?.deleteAnnotation({ value: highlight.cfi });
     this.plugin.store.markChanged(0);
     await this.syncAnnotationDocuments();
@@ -2326,14 +2340,14 @@ export class OmniBookReaderView extends FileView {
 
   private openHighlightTags(highlight: ReaderHighlight): void {
     new HighlightTagsModal(this.app, highlight, async (tags) => {
+      // Highlights saved this way are listed in the book note's Quotes property (kept by the background device).
+      highlight.quote = true;
       await this.saveHighlightEdit(highlight, {
         note: highlight.note ?? "",
         color: highlight.color,
         style: highlight.style,
         tags,
       });
-      // Highlights saved this way are also collected in the book note's Quotes property.
-      if (this.file) await this.plugin.addQuoteToBookNote(this.file, highlight);
     }).open();
   }
 
@@ -2391,6 +2405,7 @@ export class OmniBookReaderView extends FileView {
           const next = recolor.get(highlight.color.toLowerCase());
           if (!next) continue;
           highlight.color = next;
+          markHighlightEdited(highlight);
           if (this.reader) {
             await this.reader.deleteAnnotation({ value: highlight.cfi });
             await this.reader.addAnnotation(annotationFor(highlight));
@@ -2411,6 +2426,7 @@ export class OmniBookReaderView extends FileView {
     highlight.color = edit.color;
     highlight.style = edit.style;
     highlight.tags = edit.tags;
+    markHighlightEdited(highlight);
     if (note) {
       highlight.note = note;
       highlight.noteUpdatedAt = Date.now();
@@ -2431,12 +2447,12 @@ export class OmniBookReaderView extends FileView {
   private async syncAnnotationDocuments(): Promise<boolean> {
     if (!this.file || !this.bookState) return false;
     try {
-      await this.plugin.syncAnnotationDocuments({
+      if (!await this.plugin.syncAnnotationDocuments({
         sourceFile: this.file,
         state: this.bookState,
         title: this.bookTitle,
         author: this.bookAuthor,
-      });
+      })) return false;
       this.plugin.store.markChanged(0);
       return true;
     } catch (error) {
@@ -2494,15 +2510,6 @@ export class OmniBookReaderView extends FileView {
     this.uiState.close("selection");
   }
 
-  /** Writes the page being read into the book note: every few minutes, and when the tab closes or switches book. */
-  private recordReadingProgress(file: TFile): void {
-    const page = this.currentPageLabel();
-    if (!page || !this.bookState) return;
-    void this.plugin.recordReadingProgress(file, page).catch((error: unknown) => {
-      console.error("[Omni Book Reader] Could not record reading progress in the book note", error);
-    });
-  }
-
   /** The page shown in the reader: the publisher's page label when the EPUB has one, otherwise the location number. */
   private currentPageLabel(): string {
     const label = formatLanguageValue(this.currentLocation.pageItem?.label);
@@ -2538,7 +2545,7 @@ export class OmniBookReaderView extends FileView {
 
     if (this.bookState?.readingStats) {
       this.bookState.readingStats.furthestFraction = Math.max(this.bookState.readingStats.furthestFraction, fraction);
-      if (fraction >= 0.98 && !this.bookState.readingStats.completedAt) this.bookState.readingStats.completedAt = Date.now();
+      if (fraction >= 0.98 && !this.bookState.readingStats.completedAt) setCompletion(this.bookState.readingStats, Date.now());
       this.updateReadingStatsText();
     }
 
@@ -2554,12 +2561,14 @@ export class OmniBookReaderView extends FileView {
     if (!this.bookState || !this.currentLocation.cfi) return;
     const synced = this.syncedPosition && Date.now() <= this.syncedPosition.until ? this.syncedPosition.position : null;
     this.syncedPosition = null;
+    const page = this.currentPageLabel();
     this.bookState.position = {
       cfi: this.currentLocation.cfi,
       fraction: this.currentLocation.fraction ?? 0,
       updatedAt: synced?.updatedAt ?? Date.now(),
+      ...(synced?.page ? { page: synced.page } : page ? { page } : {}),
     };
-    this.plugin.store.markChanged(0);
+    this.plugin.store.markChanged(0, "progress");
   }
 
   private currentChapter(): string {
@@ -2581,11 +2590,7 @@ export class OmniBookReaderView extends FileView {
     this.sessionReadingMs = 0;
     if (this.statsTimer !== null) window.clearInterval(this.statsTimer);
     this.statsTimer = window.setInterval(() => this.tickReadingStats(), 15000);
-    if (this.progressSaveTimer !== null) window.clearInterval(this.progressSaveTimer);
-    this.progressSaveTimer = window.setInterval(() => {
-      if (this.file) this.recordReadingProgress(this.file);
-    }, PROGRESS_SAVE_INTERVAL_MS);
-    this.plugin.store.markChanged(0);
+    this.plugin.store.markChanged(0, "progress");
     this.updateReadingStatsText();
   }
 
@@ -2601,9 +2606,10 @@ export class OmniBookReaderView extends FileView {
     this.statsLastTick = now;
     if (document.visibilityState === "hidden" || now - this.statsLastActivity > 120000) return;
     this.bookState.readingStats.totalReadingMs += elapsed;
+    addDeviceReadingTime(this.bookState.readingStats, elapsed);
     this.bookState.readingStats.lastReadAt = now;
     this.sessionReadingMs += elapsed;
-    this.plugin.store.markChanged(250);
+    this.plugin.store.markChanged(250, "progress");
     this.updateReadingStatsText();
   }
 
@@ -2623,8 +2629,7 @@ export class OmniBookReaderView extends FileView {
       return;
     }
     new ReadingStatsModal(this.app, stats, this.sessionReadingMs, () => {
-      if (stats.completedAt) delete stats.completedAt;
-      else stats.completedAt = Date.now();
+      setCompletion(stats, stats.completedAt ? undefined : Date.now());
       this.plugin.store.markChanged(0);
     }).open();
   }
@@ -2705,6 +2710,7 @@ export class OmniBookReaderView extends FileView {
     remove.addEventListener("click", () => {
       if (!this.bookState) return;
       this.bookState.bookmarks = this.bookState.bookmarks.filter((item) => item.id !== bookmark.id);
+      recordBookmarkDeletion(this.bookState, bookmark.id);
       this.plugin.store.markChanged(0);
       this.renderBookmarks();
       this.updateBookmarkButton();
@@ -2820,7 +2826,7 @@ export class OmniBookReaderView extends FileView {
     if (!this.reader) return;
     if (!canNavigateToSavedLocation(item.cfi, (target) => this.reader?.resolveNavigation(target))) {
       item.stale = true;
-      this.plugin.store.markChanged(0);
+      this.plugin.store.markChanged(0, "progress");
       this.renderBookmarks();
       this.renderHighlights();
       new Notice("This location is no longer valid. Its data was kept for review or deletion.");
@@ -2830,7 +2836,7 @@ export class OmniBookReaderView extends FileView {
       await this.reader.goTo(item.cfi);
     } catch {
       item.stale = true;
-      this.plugin.store.markChanged(0);
+      this.plugin.store.markChanged(0, "progress");
       this.renderBookmarks();
       this.renderHighlights();
       new Notice("This location is no longer valid. Its data was kept for review or deletion.");
@@ -3063,8 +3069,6 @@ export class OmniBookReaderView extends FileView {
     this.tickReadingStats();
     if (this.statsTimer !== null) window.clearInterval(this.statsTimer);
     this.statsTimer = null;
-    if (this.progressSaveTimer !== null) window.clearInterval(this.progressSaveTimer);
-    this.progressSaveTimer = null;
     this.statsLastTick = 0;
     this.statsLastActivity = 0;
     this.searchSession.cancel();

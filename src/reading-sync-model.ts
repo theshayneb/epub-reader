@@ -10,6 +10,7 @@ import { ANNOTATION_FOLDER } from "./annotation-documents";
 import { normalizeColorNames, normalizeColorOrder, normalizeExtraColors, toHighlightColor, type ColorNames } from "./highlight-colors";
 import { isNoteLayout, type NoteLayout } from "./note-layout";
 import { isValidCfi, normalizeVaultPath } from "./utils";
+import { knowDeviceReadingTime } from "./edit-records";
 
 /**
  * Cross-device reading sync model.
@@ -109,14 +110,28 @@ export function createSyncDocument(deviceId: string): SyncDocument {
   return { format: SYNC_FORMAT, version: SYNC_VERSION, deviceId, updatedAt: 0, books: {} };
 }
 
+/** A highlight as stored in a sync file. Its edit time lives on the entry, not in the value. */
 function syncedHighlight(highlight: ReaderHighlight): SyncedHighlight {
-  const { stale: _stale, ...value } = highlight;
+  const { stale: _stale, updatedAt: _updatedAt, ...value } = highlight;
   return value;
 }
 
 function syncedBookmark(bookmark: Bookmark): SyncedBookmark {
-  const { stale: _stale, ...value } = bookmark;
+  const { stale: _stale, updatedAt: _updatedAt, ...value } = bookmark;
   return value;
+}
+
+/**
+ * When a highlight was last edited. Set at edit time on whichever device made the edit; highlights
+ * from before edit times existed fall back to when they were created or their note last changed,
+ * so an untouched old copy can never beat a newer edit made elsewhere.
+ */
+export function highlightEditTime(highlight: ReaderHighlight): number {
+  return highlight.updatedAt ?? Math.max(highlight.createdAt, highlight.noteUpdatedAt ?? 0);
+}
+
+export function bookmarkEditTime(bookmark: Bookmark): number {
+  return bookmark.updatedAt ?? bookmark.createdAt;
 }
 
 function entryTime(entry: SyncEntry<unknown>): number {
@@ -247,73 +262,59 @@ function fingerprint(value: unknown): string {
 }
 
 /**
- * Records local edits into the sync document by comparing the local book state with what the
- * sync document last said about it. Anything the document does not yet know is a local change.
- *
- * `firstImport` is true the first time this device ever syncs. Its local data has no sync history
- * then, so nothing missing locally counts as a deletion, and differing copies are merged by their
- * own edit times instead of "now". A device holding older copies of the same annotations therefore
- * cannot delete or override newer data that other devices already synced.
+ * Records this device's state into the sync document. Merging is by edit time, never by when this
+ * runs: each highlight and bookmark carries the time it was edited, and deletions are explicit
+ * tombstones made when the user deleted something. Nothing missing locally is ever read as a
+ * deletion, and nothing is stamped "now" here, so a device holding stale copies (a late-syncing
+ * tablet, a foreign `data.json`, an older plugin version) can never override newer edits made
+ * elsewhere or bring back what another device deleted.
  */
 export function recordLocalBook(
   doc: SyncDocument,
   path: string,
   state: BookState,
   deviceId: string,
-  now: number,
-  firstImport = false,
 ): boolean {
   const known = doc.books[path];
   const book = known ? structuredClone(known) : emptySyncedBook();
 
-  const localHighlights = new Map(state.highlights.map((item) => [item.id, syncedHighlight(item)]));
-  for (const [id, value] of localHighlights) {
+  for (const highlight of state.highlights) {
+    const local: SyncEntry<SyncedHighlight> = { value: syncedHighlight(highlight), updatedAt: highlightEditTime(highlight) };
+    const entry = book.highlights[highlight.id];
+    book.highlights[highlight.id] = entry ? newerEntry(entry, local) : local;
+  }
+  for (const [id, deletedAt] of Object.entries(state.deletedHighlights ?? {})) {
+    const tombstone: SyncEntry<SyncedHighlight> = { deletedAt };
     const entry = book.highlights[id];
-    const current = entry && "value" in entry ? entry.value : undefined;
-    if (current && fingerprint(withoutLegacyColor(current)) === fingerprint(value)) continue;
-    const local: SyncEntry<SyncedHighlight> = firstImport
-      ? { value, updatedAt: Math.max(value.createdAt, value.noteUpdatedAt ?? 0) }
-      : { value, updatedAt: now };
-    book.highlights[id] = firstImport && entry ? newerEntry(entry, local) : local;
+    book.highlights[id] = entry ? newerEntry(entry, tombstone) : tombstone;
   }
 
-  const localBookmarks = new Map(state.bookmarks.map((item) => [item.id, syncedBookmark(item)]));
-  for (const [id, value] of localBookmarks) {
+  for (const bookmark of state.bookmarks) {
+    const local: SyncEntry<SyncedBookmark> = { value: syncedBookmark(bookmark), updatedAt: bookmarkEditTime(bookmark) };
+    const entry = book.bookmarks[bookmark.id];
+    book.bookmarks[bookmark.id] = entry ? newerEntry(entry, local) : local;
+  }
+  for (const [id, deletedAt] of Object.entries(state.deletedBookmarks ?? {})) {
+    const tombstone: SyncEntry<SyncedBookmark> = { deletedAt };
     const entry = book.bookmarks[id];
-    const current = entry && "value" in entry ? entry.value : undefined;
-    if (current && fingerprint(current) === fingerprint(value)) continue;
-    const local: SyncEntry<SyncedBookmark> = { value, updatedAt: firstImport ? value.createdAt : now };
-    book.bookmarks[id] = firstImport && entry ? newerEntry(entry, local) : local;
-  }
-
-  if (!firstImport) {
-    for (const [id, entry] of Object.entries(book.highlights)) {
-      if ("value" in entry && !localHighlights.has(id)) book.highlights[id] = { deletedAt: now };
-    }
-    for (const [id, entry] of Object.entries(book.bookmarks)) {
-      if ("value" in entry && !localBookmarks.has(id)) book.bookmarks[id] = { deletedAt: now };
-    }
+    book.bookmarks[id] = entry ? newerEntry(entry, tombstone) : tombstone;
   }
 
   book.position = newerPosition(book.position, state.position);
 
   const stats = state.readingStats;
   if (stats) {
-    const othersMs = Object.entries(book.readingMsByDevice)
-      .filter(([device]) => device !== deviceId)
-      .reduce((sum, [, ms]) => sum + ms, 0);
-    const knownTotal = othersMs + (book.readingMsByDevice[deviceId] ?? 0);
-    if (stats.totalReadingMs > knownTotal) {
-      book.readingMsByDevice[deviceId] = (book.readingMsByDevice[deviceId] ?? 0) + (stats.totalReadingMs - knownTotal);
+    // This device's own counter only grows; other devices' counters are theirs to report.
+    knowDeviceReadingTime(stats, book.readingMsByDevice[deviceId] ?? 0);
+    if (stats.deviceReadingMs) {
+      book.readingMsByDevice[deviceId] = Math.max(book.readingMsByDevice[deviceId] ?? 0, stats.deviceReadingMs);
     }
     book.lastOpenedAt = Math.max(book.lastOpenedAt, stats.lastOpenedAt);
     book.lastReadAt = Math.max(book.lastReadAt, stats.lastReadAt);
     book.furthestFraction = Math.max(book.furthestFraction, stats.furthestFraction);
-    const completedAt = stats.completedAt ?? null;
-    if ((book.completion?.completedAt ?? null) !== completedAt) {
-      book.completion = firstImport
-        ? newerCompletion(book.completion, { completedAt, updatedAt: completedAt ?? 0 })
-        : { completedAt, updatedAt: now };
+    const completionTime = stats.completedUpdatedAt ?? stats.completedAt;
+    if (completionTime) {
+      book.completion = newerCompletion(book.completion, { completedAt: stats.completedAt ?? null, updatedAt: completionTime });
     }
   }
 
@@ -344,7 +345,7 @@ function sortByCreation<T extends { createdAt: number; id: string }>(items: T[])
  * hold a reference to it stay valid. Local-only fields (stale flags, bookshelf metadata, source
  * signature) are preserved.
  */
-export function applySyncedBook(path: string, state: BookState, book: SyncedBook): AppliedBookChange {
+export function applySyncedBook(path: string, state: BookState, book: SyncedBook, deviceId = ""): AppliedBookChange {
   const change: AppliedBookChange = {
     path,
     removedHighlights: [],
@@ -361,10 +362,12 @@ export function applySyncedBook(path: string, state: BookState, book: SyncedBook
     if (!("value" in entry)) continue;
     const previous = previousHighlights.get(id);
     if (previous && fingerprint(syncedHighlight(previous)) === fingerprint(withoutLegacyColor(entry.value))) {
+      // Same content: adopt the merged edit time without counting it as a visible change.
+      previous.updatedAt = entry.updatedAt;
       nextHighlights.push(previous);
       continue;
     }
-    const next: ReaderHighlight = structuredClone(withoutLegacyColor(entry.value));
+    const next: ReaderHighlight = { ...structuredClone(withoutLegacyColor(entry.value)), updatedAt: entry.updatedAt };
     if (previous?.stale && previous.cfi === next.cfi) next.stale = true;
     if (previous) change.removedHighlights.push(previous);
     change.addedHighlights.push(next);
@@ -384,11 +387,16 @@ export function applySyncedBook(path: string, state: BookState, book: SyncedBook
     if (!("value" in entry)) continue;
     const previous = previousBookmarks.get(id);
     if (previous && fingerprint(syncedBookmark(previous)) === fingerprint(entry.value)) {
+      previous.updatedAt = entry.updatedAt;
       nextBookmarks.push(previous);
       continue;
     }
     change.bookmarksChanged = true;
-    nextBookmarks.push({ ...structuredClone(entry.value), ...(previous?.stale && previous.cfi === entry.value.cfi ? { stale: true } : {}) });
+    nextBookmarks.push({
+      ...structuredClone(entry.value),
+      updatedAt: entry.updatedAt,
+      ...(previous?.stale && previous.cfi === entry.value.cfi ? { stale: true } : {}),
+    });
   }
   if (nextBookmarks.length !== state.bookmarks.length) change.bookmarksChanged = true;
   if (change.bookmarksChanged) state.bookmarks = sortByCreation(nextBookmarks);
@@ -399,7 +407,12 @@ export function applySyncedBook(path: string, state: BookState, book: SyncedBook
     change.positionChanged = true;
   }
 
-  const totalReadingMs = Object.values(book.readingMsByDevice).reduce((sum, ms) => sum + ms, 0);
+  // Start this device's own counter from what its sync file already credits it with.
+  if (deviceId && state.readingStats) knowDeviceReadingTime(state.readingStats, book.readingMsByDevice[deviceId] ?? 0);
+  const ownMs = Math.max(book.readingMsByDevice[deviceId] ?? 0, state.readingStats?.deviceReadingMs ?? 0);
+  const totalReadingMs = Object.entries(book.readingMsByDevice)
+    .filter(([device]) => device !== deviceId)
+    .reduce((sum, [, ms]) => sum + ms, ownMs);
   const hasStats = totalReadingMs > 0 || book.lastOpenedAt > 0 || book.lastReadAt > 0
     || book.furthestFraction > 0 || Boolean(book.completion?.completedAt);
   if (hasStats) {
@@ -411,11 +424,15 @@ export function applySyncedBook(path: string, state: BookState, book: SyncedBook
       lastReadAt: Math.max(book.lastReadAt, previous?.lastReadAt ?? 0),
       furthestFraction: Math.max(book.furthestFraction, previous?.furthestFraction ?? 0),
       ...(completedAt ? { completedAt } : {}),
+      ...(book.completion ? { completedUpdatedAt: book.completion.updatedAt } : previous?.completedUpdatedAt ? { completedUpdatedAt: previous.completedUpdatedAt } : {}),
+      ...(previous?.deviceReadingMs !== undefined ? { deviceReadingMs: previous.deviceReadingMs } : {}),
+      ...(previous?.unrecordedReadingMs ? { unrecordedReadingMs: previous.unrecordedReadingMs } : {}),
     };
     if (canonicalJson(next) !== canonicalJson(previous ?? null)) {
       if (previous) {
         Object.assign(previous, next);
         if (!completedAt) delete previous.completedAt;
+        if (next.completedUpdatedAt === undefined) delete previous.completedUpdatedAt;
       } else {
         state.readingStats = next;
       }
@@ -476,6 +493,7 @@ function parseHighlight(input: unknown): SyncedHighlight | null {
     createdAt: finite(input.createdAt),
     ...(typeof input.page === "string" && input.page.trim() ? { page: input.page.trim().slice(0, 50) } : {}),
     ...(input.lookup === true ? { lookup: true } : {}),
+    ...(input.quote === true ? { quote: true } : {}),
     ...(typeof input.note === "string" && input.note ? { note: input.note.slice(0, 20000) } : {}),
     ...(typeof input.noteUpdatedAt === "number" && Number.isFinite(input.noteUpdatedAt) ? { noteUpdatedAt: input.noteUpdatedAt } : {}),
   };
@@ -500,6 +518,7 @@ function parseSyncedBook(value: unknown): SyncedBook | null {
       cfi: value.position.cfi.trim(),
       fraction: Math.min(1, Math.max(0, finite(value.position.fraction))),
       updatedAt: finite(value.position.updatedAt),
+      ...(typeof value.position.page === "string" && value.position.page.trim() ? { page: value.position.page.trim().slice(0, 50) } : {}),
     };
   }
   book.highlights = parseEntries(value.highlights, parseHighlight);

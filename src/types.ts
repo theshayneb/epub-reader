@@ -57,6 +57,8 @@ export interface ReadingPosition {
   cfi: string;
   fraction: number;
   updatedAt: number;
+  /** Page label shown in the reader at this position; written to the book note's `Progress`. */
+  page?: string;
 }
 
 export interface Bookmark {
@@ -65,6 +67,8 @@ export interface Bookmark {
   fraction: number;
   chapter: string;
   createdAt: number;
+  /** When this bookmark was last changed on any device; merges keep the newest. */
+  updatedAt?: number;
   stale?: boolean;
 }
 
@@ -82,8 +86,12 @@ export interface ReaderHighlight {
   page?: string;
   /** True when the highlight was saved from a word lookup; its note is the definition or translation. */
   lookup?: boolean;
+  /** True when saved with "Highlight and add tags"; the book note's `Quotes` property lists these. */
+  quote?: boolean;
   note?: string;
   noteUpdatedAt?: number;
+  /** When this highlight was last changed on any device (set at edit time); merges keep the newest. */
+  updatedAt?: number;
   stale?: boolean;
 }
 
@@ -99,6 +107,12 @@ export interface ReadingStats {
   lastReadAt: number;
   furthestFraction: number;
   completedAt?: number;
+  /** When "finished" was last set or cleared, on any device. */
+  completedUpdatedAt?: number;
+  /** Reading time spent on this device only; the sync file's per-device counter. */
+  deviceReadingMs?: number;
+  /** Time read on this device before `deviceReadingMs` was known; added to it once it is. */
+  unrecordedReadingMs?: number;
 }
 
 export interface BookState {
@@ -118,6 +132,10 @@ export interface BookState {
   /** When the layout, heading order, color names or added colors last changed; they sync as one unit. */
   noteSettingsUpdatedAt?: number;
   readingStats?: ReadingStats;
+  /** Highlights deleted on this device, by id, with the time of deletion (tombstones until synced). */
+  deletedHighlights?: Record<string, number>;
+  /** Bookmarks deleted on this device, by id, with the time of deletion. */
+  deletedBookmarks?: Record<string, number>;
   /** User-managed bookshelf metadata. These fields never affect the EPUB itself. */
   hiddenFromBookshelf?: boolean;
   inReadingList?: boolean;

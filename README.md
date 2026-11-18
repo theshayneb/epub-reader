@@ -40,9 +40,13 @@ This is the only feature that goes online, and only when you tap the button. The
 
 ## Syncing across devices
 
-Reading position, highlights, notes, bookmarks, reading time, and finished state sync between devices that share the vault. Each device writes its own file to `Utilities/Omni Book Reader Mod/Sync/` (configurable in settings), and the plugin merges the other devices' files as they arrive. Edits made on several devices before they sync are combined rather than overwritten, and deletions carry over. If a book is open when a newer position arrives from another device, the reader moves there.
+Reading position, highlights, notes, bookmarks, reading time, and finished state sync between devices that share the vault. Each device writes its own file to `Utilities/Omni Book Reader Mod/Sync/` (configurable in settings), and the plugin merges the other devices' files as they arrive. Every edit and deletion carries the time it was made, so edits made on several devices before they sync are combined by when they happened, and deletions carry over. If a book is open when a newer position arrives from another device, the reader moves there. Reading progress is written to the sync file at most every two minutes while reading, and right away when you close the book or leave the app.
 
-With Obsidian Sync, turn on **Sync all other types** in Obsidian Sync's settings so the `.json` sync files are included. Any other file sync service works too. Display settings stay per device. Use **ePub Reader: Sync reading data now** from the command palette to force a sync.
+With Obsidian Sync, turn on **Sync all other types** in Obsidian Sync's settings so the `.json` sync files are included. Any other file sync service works too. Use **ePub Reader: Sync reading data now** from the command palette to force a sync.
+
+Display, typography and other reader preferences are kept on each device and never synced. Only **Merge adjacent highlights** and the reading sync switch and folder are shared through the plugin's `data.json`, merged setting by setting.
+
+Book notes (the highlights callout, `Progress` and `Quotes`) are written only by the device with **Run background tasks on this device** turned on (on by default on desktop, off on mobile), once Obsidian Sync has been quiet for a minute. Highlights made on a phone or tablet reach the note when that device receives their sync file. Keep it on for one always-on device. Every device must run version 1.1.38 or later.
 
 ## Markdown exports
 

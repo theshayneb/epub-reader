@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { ReaderDataStore, mergeReaderData, normalizeReaderData, type DataAdapter } from "../src/store";
+import { ReaderDataStore, memoryDeviceStorage, mergeReaderData, normalizeReaderData, type BookStorage, type DataAdapter } from "../src/store";
+
+class CountingBooks implements BookStorage {
+  value: unknown = null;
+  saves = 0;
+  active = 0;
+  maxConcurrent = 0;
+
+  async load(): Promise<unknown> {
+    return this.value === null ? null : structuredClone(this.value);
+  }
+
+  async save(books: unknown): Promise<void> {
+    this.active += 1;
+    this.maxConcurrent = Math.max(this.maxConcurrent, this.active);
+    await Promise.resolve();
+    this.value = structuredClone(books);
+    this.saves += 1;
+    this.active -= 1;
+  }
+}
 
 class MemoryAdapter implements DataAdapter {
   value: unknown = null;
@@ -118,7 +138,8 @@ describe("reader data store", () => {
 
   it("migrates state on rename and serializes overlapping saves", async () => {
     const adapter = new MemoryAdapter();
-    const store = new ReaderDataStore(adapter);
+    const books = new CountingBooks();
+    const store = new ReaderDataStore(adapter, console.error, { books });
     await store.load();
     store.ensureBook("Old/book.epub", { size: 1, mtime: 1 });
     const first = store.persist();
@@ -129,7 +150,8 @@ describe("reader data store", () => {
 
     expect(store.getBook("Old/book.epub")).toBeUndefined();
     expect(store.getBook("New/book.epub")).toBeDefined();
-    expect(adapter.maxConcurrentSaves).toBe(1);
+    expect(books.maxConcurrent).toBe(1);
+    expect(adapter.saves).toHaveLength(0);
   });
 
   it("merges data from a previous plugin folder without losing newer state", async () => {
@@ -206,6 +228,104 @@ describe("reader data store", () => {
   });
 });
 
+describe("data.json holds only shared settings", () => {
+  const oldDataJson = () => ({
+    schemaVersion: 5,
+    settings: { theme: "dark", fontSizePercent: 120, connectAdjacentHighlights: false, syncFolder: "Sync" },
+    books: {
+      "Books/a.epub": { sourceSignature: { size: 1, mtime: 1 }, bookmarks: [], highlights: [], position: { cfi: "epubcfi(/6/2!/4/2:0)", fraction: 0.3, updatedAt: 5 } },
+    },
+    importedLegacyDataPaths: [],
+  });
+
+  it("never writes data.json on load or while reading, and seeds local storage once", async () => {
+    const adapter = new MemoryAdapter();
+    adapter.value = oldDataJson();
+    const books = new CountingBooks();
+    const device = memoryDeviceStorage();
+    const store = new ReaderDataStore(adapter, console.error, { books, device });
+    await store.load();
+    expect(store.settings).toMatchObject({ theme: "dark", fontSizePercent: 120, connectAdjacentHighlights: false, syncFolder: "Sync" });
+    expect(store.getBook("Books/a.epub")?.position?.fraction).toBe(0.3);
+
+    store.getBook("Books/a.epub")!.position = { cfi: "epubcfi(/6/2!/4/2:1)", fraction: 0.6, updatedAt: 9 };
+    store.markChanged(0, "progress");
+    store.updateSettings({ theme: "light", fontSizePercent: 140, defaultHighlightColor: "#6f9fe8" });
+    await store.flush();
+    expect(adapter.saves).toHaveLength(0);
+    expect(books.saves).toBeGreaterThan(0);
+
+    // A later start reads this device's own copies, not data.json's stale ones.
+    adapter.value = { ...oldDataJson(), settings: { ...oldDataJson().settings, theme: "sepia" } };
+    const again = new ReaderDataStore(adapter, console.error, { books, device });
+    await again.load();
+    expect(again.settings).toMatchObject({ theme: "light", fontSizePercent: 140 });
+    expect(again.getBook("Books/a.epub")?.position?.fraction).toBe(0.6);
+    expect(adapter.saves).toHaveLength(0);
+  });
+
+  it("writes a shared setting by re-reading disk, keeping other keys and older versions' books", async () => {
+    const adapter = new MemoryAdapter();
+    adapter.value = oldDataJson();
+    const store = new ReaderDataStore(adapter);
+    await store.load();
+    // Another device changed the folder on disk meanwhile.
+    adapter.value = { ...oldDataJson(), settings: { ...oldDataJson().settings, syncFolder: "Elsewhere" }, settingsUpdatedAt: { syncFolder: 1 } };
+    store.updateSettings({ connectAdjacentHighlights: true });
+    await store.flush();
+    expect(adapter.saves).toHaveLength(1);
+    const saved = adapter.value as ReturnType<typeof oldDataJson> & { settingsUpdatedAt: Record<string, number> };
+    expect(saved.books).toEqual(oldDataJson().books);
+    expect(saved.settings).toMatchObject({ connectAdjacentHighlights: true, syncFolder: "Elsewhere", theme: "dark" });
+    expect(saved.settingsUpdatedAt.connectAdjacentHighlights).toBeGreaterThan(0);
+    expect(store.settings.syncFolder).toBe("Elsewhere");
+
+    // Setting the same value again writes nothing.
+    store.updateSettings({ connectAdjacentHighlights: true });
+    await store.flush();
+    expect(adapter.saves).toHaveLength(1);
+  });
+
+  it("merges settings another device synced per key by edit time, saving only when this device is newer", async () => {
+    const adapter = new MemoryAdapter();
+    adapter.value = { settings: { connectAdjacentHighlights: true, syncFolder: "A" }, settingsUpdatedAt: { connectAdjacentHighlights: 10, syncFolder: 10 } };
+    const store = new ReaderDataStore(adapter);
+    await store.load();
+
+    adapter.value = { settings: { connectAdjacentHighlights: false, syncFolder: "A" }, settingsUpdatedAt: { connectAdjacentHighlights: 20, syncFolder: 10 } };
+    expect(await store.reloadSharedSettings()).toBe(true);
+    expect(store.settings.connectAdjacentHighlights).toBe(false);
+    expect(adapter.saves).toHaveLength(0);
+
+    // Unchanged disk: nothing changes, nothing is written.
+    expect(await store.reloadSharedSettings()).toBe(false);
+    expect(adapter.saves).toHaveLength(0);
+
+    // An older copy arriving late does not undo the newer edit, and this device writes its newer value back.
+    adapter.value = { settings: { connectAdjacentHighlights: true, syncFolder: "A" }, settingsUpdatedAt: { connectAdjacentHighlights: 15, syncFolder: 10 } };
+    expect(await store.reloadSharedSettings()).toBe(false);
+    expect(store.settings.connectAdjacentHighlights).toBe(false);
+    expect(adapter.saves).toHaveLength(1);
+    expect((adapter.value as { settings: { connectAdjacentHighlights: boolean } }).settings.connectAdjacentHighlights).toBe(false);
+  });
+
+  it("keeps the background-tasks switch on this device only", async () => {
+    const adapter = new MemoryAdapter();
+    const device = memoryDeviceStorage();
+    const mobile = new ReaderDataStore(adapter, console.error, { device, defaultBackgroundTasks: false });
+    await mobile.load();
+    expect(mobile.runBackgroundTasks).toBe(false);
+    mobile.setRunBackgroundTasks(true);
+    const again = new ReaderDataStore(adapter, console.error, { device, defaultBackgroundTasks: false });
+    await again.load();
+    expect(again.runBackgroundTasks).toBe(true);
+    expect(adapter.saves).toHaveLength(0);
+    const desktop = new ReaderDataStore(adapter, console.error, { defaultBackgroundTasks: true });
+    await desktop.load();
+    expect(desktop.runBackgroundTasks).toBe(true);
+  });
+});
+
 describe("highlight colors from before 1.1.29", () => {
   it("turns stored color words into the shared palette's values", () => {
     const data = normalizeReaderData({
@@ -232,5 +352,29 @@ describe("highlight colors from before 1.1.29", () => {
     expect(book.colorOrder).toEqual(["#6f9fe8", "#b197fc"]);
     expect(book.colorNames).toEqual({ "#83cb67": "Costs" });
     expect(book.noteSettingsUpdatedAt).toBe(5);
+  });
+
+  it("keeps edit times, tombstones, the quote flag and reading bookkeeping through a save and load", () => {
+    const data = normalizeReaderData({
+      books: {
+        "Books/b.epub": {
+          sourceSignature: { size: 1, mtime: 1 },
+          position: { cfi: "epubcfi(/6/2!/4/2:0)", fraction: 0.5, updatedAt: 7, page: " 12 " },
+          bookmarks: [{ id: "m", cfi: "epubcfi(/6/2!/4/2:0)", fraction: 0.1, chapter: "C", createdAt: 2, updatedAt: 3 }],
+          highlights: [{ id: "h", cfi: "epubcfi(/6/2!/4/2:0)", text: "T", chapter: "C", color: "#ffd12d", style: "highlight", tags: [], sectionIndex: 0, createdAt: 4, updatedAt: 5, quote: true }],
+          deletedHighlights: { gone: 9, bad: "x" },
+          deletedBookmarks: { old: 8 },
+          readingStats: { totalReadingMs: 10, lastOpenedAt: 1, lastReadAt: 1, furthestFraction: 0.5, completedUpdatedAt: 6, deviceReadingMs: 4, unrecordedReadingMs: 2 },
+        },
+      },
+    });
+    const book = data.books["Books/b.epub"]!;
+    expect(book.position).toMatchObject({ page: "12", updatedAt: 7 });
+    expect(book.bookmarks[0]?.updatedAt).toBe(3);
+    expect(book.highlights[0]).toMatchObject({ updatedAt: 5, quote: true });
+    expect(book.deletedHighlights).toEqual({ gone: 9 });
+    expect(book.deletedBookmarks).toEqual({ old: 8 });
+    expect(book.readingStats).toMatchObject({ completedUpdatedAt: 6, deviceReadingMs: 4, unrecordedReadingMs: 2 });
+    expect(normalizeReaderData(JSON.parse(JSON.stringify(data)))).toEqual(data);
   });
 });

@@ -101,6 +101,18 @@ function normalizeSyncFolder(value: unknown): string {
   return folder;
 }
 
+/**
+ * Settings shared by every device, kept in the plugin's `data.json` (synced by Obsidian Sync) and merged
+ * per key by edit time. Everything else is per device (display, typography, reader and bookshelf UI
+ * state, remembered highlight color/style, Android text menu) and lives in local storage.
+ */
+export const SHARED_SETTING_KEYS = ["connectAdjacentHighlights", "syncEnabled", "syncFolder"] as const;
+export type SharedSettingKey = typeof SHARED_SETTING_KEYS[number];
+
+export function isSharedSettingKey(key: string): key is SharedSettingKey {
+  return (SHARED_SETTING_KEYS as readonly string[]).includes(key);
+}
+
 export function createDefaultData(): ReaderData {
   return {
     schemaVersion: 5,
